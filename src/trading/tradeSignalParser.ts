@@ -40,22 +40,47 @@ const VALUE_KEYWORDS = [
   "tp",
   "target",
   "at",
+  "open",
+  "close",
+  "closed",
+  "tracked",
+  "track",
+  "trade",
+  "trades",
+  "signal",
+  "update",
+  "vault",
+  "position",
+  "status",
+  "margin",
+  "utilization",
 ];
+
+const VALUE_KEYWORD_SET = new Set(VALUE_KEYWORDS);
+
+const CURRENCY_SYMBOLS = "\\$€£¥₩₿₹₽₺₫₴₦₱";
+const OPTIONAL_CURRENCY = `(?:[${CURRENCY_SYMBOLS}])?`;
+const NUMBER_CAPTURE = "(-?\\d+(?:[.,]\\d+)?)";
+const TAKE_PROFIT_VALUE_PATTERN = new RegExp(
+  `^\\s*(?:=|:|@|at)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`,
+  "i",
+);
+const URL_PATTERN = /https?:/i;
 
 const SPLIT_REGEX = /[\s,;]+/g;
 
 const SIZE_PATTERNS = [
-  /\b(?:size|qty|quantity|amount|volume)\b\s*(?:=|:)?\s*(-?\d+(?:[.,]\d+)?)/i,
+  new RegExp(`\\b(?:size|qty|quantity|amount|volume)\\b\\s*(?:=|:)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
 ];
 
 const ENTRY_PATTERNS = [
-  /\bentry\b\s*(?:=|:)?\s*(-?\d+(?:[.,]\d+)?)/i,
-  /\bprice\b\s*(?:=|:)?\s*(-?\d+(?:[.,]\d+)?)/i,
-  /(?:^|\s)@\s*(-?\d+(?:[.,]\d+)?)/i,
+  new RegExp(`\\bentry\\b\\s*(?:=|:)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
+  new RegExp(`\\bprice\\b\\s*(?:=|:)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
+  new RegExp(`(?:^|\\s)@\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
 ];
 
 const STOP_PATTERNS = [
-  /\b(?:stop(?:\s*loss)?|sl)\b\s*(?:=|:|@)?\s*(-?\d+(?:[.,]\d+)?)/i,
+  new RegExp(`\\b(?:stop(?:\\s*loss)?|sl)\\b\\s*(?:=|:|@)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
 ];
 
 const LEVERAGE_PATTERNS = [
@@ -119,7 +144,7 @@ function extractTakeProfits(text: string): number[] {
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
     const slice = text.slice(match.index + match[0].length);
-    const numberMatch = /^\s*(?:=|:|@|at)?\s*(-?\d+(?:[.,]\d+)?)/i.exec(slice);
+    const numberMatch = TAKE_PROFIT_VALUE_PATTERN.exec(slice);
     if (!numberMatch) {
       continue;
     }
@@ -167,20 +192,36 @@ export function parseTradeSignal(text: string): TradeSignal {
   }
 
   let rawSymbol = "";
+  let fallbackSymbol = "";
   for (let i = sideIndex + 1; i < tokens.length; ++i) {
     const token = tokens[i];
     if (!token) {
       continue;
     }
+    if (URL_PATTERN.test(token)) {
+      continue;
+    }
     const lower = token.toLowerCase();
-    if (VALUE_KEYWORDS.includes(lower)) {
+    if (VALUE_KEYWORD_SET.has(lower)) {
       continue;
     }
-    if (/^\d/.test(token)) {
+    if (/^[\d@]/.test(token)) {
       continue;
     }
-    rawSymbol = token;
-    break;
+    const normalizedCandidate = normalizeSymbol(token);
+    if (!normalizedCandidate) {
+      continue;
+    }
+    if (token === token.toUpperCase()) {
+      rawSymbol = token;
+      break;
+    }
+    if (!fallbackSymbol) {
+      fallbackSymbol = token;
+    }
+  }
+  if (!rawSymbol) {
+    rawSymbol = fallbackSymbol;
   }
   if (!rawSymbol) {
     throw new TradeSignalParseError("Trading symbol could not be detected");
