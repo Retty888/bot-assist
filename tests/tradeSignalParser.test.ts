@@ -35,6 +35,31 @@ describe("parseTradeSignal", () => {
     expect(signal.stopLoss).toBeCloseTo(140.2);
   });
 
+  it("parses signals with currency symbols and bullet formatting", () => {
+    const signal = parseTradeSignal(`Trade 1
+
+👀 Open Long Tracked Trade
+
+🟩 SUI (https://trysuper.co/trade/SUI)
+
+Titan Vault (https://www.trysuper.co/trader/0x4b0eab9444a75a03f1ef340c8beac737afa5ab09) Open Long
+• Amount: 33.5 SUI ($84.13)
+• Price: $2.51130
+• Stop: $2.40
+• TP1: $2.60
+• TP2: $2.70
+• Leverage: 10x
+• Margin Utilization: 0.10%`);
+
+    expect(signal.side).toBe("long");
+    expect(signal.symbol).toBe("SUI");
+    expect(signal.size).toBeCloseTo(33.5);
+    expect(signal.entryPrice).toBeCloseTo(2.5113);
+    expect(signal.stopLoss).toBeCloseTo(2.4);
+    expect(signal.takeProfits).toEqual([2.6, 2.7]);
+    expect(signal.leverage).toBeCloseTo(10);
+  });
+
   it("throws when stop loss missing", () => {
     expect(() => parseTradeSignal("Long BTC 1 take profit 66000")).toThrow(
       TradeSignalParseError,
