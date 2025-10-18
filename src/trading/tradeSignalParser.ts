@@ -10,6 +10,20 @@ export interface DistanceConfig {
 
 export interface TrailingStopConfig extends DistanceConfig {}
 
+export type RiskLabel = "low" | "medium" | "high" | "extreme";
+
+export type TimeframeHint = string;
+
+export interface TargetAllocation {
+  readonly price: number;
+  readonly sizeFraction?: number;
+  readonly label?: string;
+}
+
+export interface StopLossLevel extends TargetAllocation {}
+
+export interface TakeProfitLevel extends TargetAllocation {}
+
 export interface EntryStrategySingle {
   readonly type: "single";
 }
@@ -40,11 +54,14 @@ export interface TradeSignal {
   readonly size: number;
   readonly entryPrice?: number;
   readonly stopLoss?: number;
-  readonly takeProfits: number[];
+  readonly stopLosses: readonly StopLossLevel[];
+  readonly takeProfits: readonly TakeProfitLevel[];
   readonly leverage?: number;
   readonly execution: ExecutionType;
   readonly trailingStop?: TrailingStopConfig;
   readonly entryStrategy: EntryStrategy;
+  readonly riskLabel?: RiskLabel;
+  readonly timeframeHints: readonly TimeframeHint[];
   readonly text: string;
 }
 
@@ -88,6 +105,10 @@ const VALUE_KEYWORDS = [
   "status",
   "margin",
   "utilization",
+  "risk",
+  "risklabel",
+  "timeframe",
+  "tf",
 ];
 
 const VALUE_KEYWORD_SET = new Set(VALUE_KEYWORDS);
@@ -95,13 +116,68 @@ const VALUE_KEYWORD_SET = new Set(VALUE_KEYWORDS);
 const CURRENCY_SYMBOLS = "\\$€£¥₩₿₹₽₺₫₴₦₱";
 const OPTIONAL_CURRENCY = `(?:[${CURRENCY_SYMBOLS}])?`;
 const NUMBER_CAPTURE = "(-?\\d+(?:[.,]\\d+)?)";
-const TAKE_PROFIT_VALUE_PATTERN = new RegExp(
-  `^\\s*(?:=|:|@|at)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`,
+const VALUE_WITH_PERCENT_PATTERN = new RegExp(
+  `^\\s*(?:=|:|@|at)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}` +
+    `(?:\\s*(?:\\(|\\[)?\\s*(\\d+(?:[.,]\\d+)?)\\s*(?:%|pct|percent)\\s*(?:\\)|\\])?)?`,
   "i",
 );
+const PERCENT_FINDER_PATTERN = /(\\d+(?:[.,]\\d+)?)\\s*(%|pct|percent)/i;
 const URL_PATTERN = /https?:/i;
 
 const SPLIT_REGEX = /[\s,;]+/g;
+
+const TAKE_PROFIT_TOKEN_PATTERN = /\b(?:tp\d*|tp|take\s*profit\d*|take\s*profit|target\d*|target)\b/gi;
+const STOP_LEVEL_TOKEN_PATTERN = /\b(?:sl\d*|stoploss\d*|stoplosses\d*|stop(?:\s*loss(?:es)?)?\d*|psl\d*)\b/gi;
+
+const RISK_PATTERNS = [
+  /\brisk(?:\s*level|\s*profile|\s*label)?\b\s*(?:=|:)?\s*([a-z\-]+)/i,
+  /\b([a-z\-]+)\s*risk\b/i,
+];
+
+const RISK_KEYWORD_MAP: Record<string, RiskLabel> = {
+  low: "low",
+  conservative: "low",
+  defensive: "low",
+  safe: "low",
+  medium: "medium",
+  mid: "medium",
+  moderate: "medium",
+  balanced: "medium",
+  neutral: "medium",
+  base: "medium",
+  high: "high",
+  aggressive: "high",
+  elevated: "high",
+  risky: "high",
+  offensive: "high",
+  extreme: "extreme",
+  degen: "extreme",
+  insane: "extreme",
+  ultrahigh: "extreme",
+  ballistic: "extreme",
+};
+
+const TIMEFRAME_KEYWORD_NORMALIZATION: Record<string, string> = {
+  scalp: "scalp",
+  scalping: "scalp",
+  scalper: "scalp",
+  swing: "swing",
+  swingtrade: "swing",
+  swingtrading: "swing",
+  intraday: "intraday",
+  daytrade: "intraday",
+  daytrading: "intraday",
+  daytrader: "intraday",
+  position: "position",
+  positional: "position",
+  positiontrade: "position",
+  positiontrading: "position",
+  longterm: "position",
+  longtermhold: "position",
+  investor: "position",
+};
+
+const WORD_TIMEFRAME_PATTERN = /\b(\d+)\s*(minute|minutes|min|hour|hours|hr|day|days|week|weeks)\b/gi;
 
 const SIZE_PATTERNS = [
   new RegExp(`\\b(?:size|qty|quantity|amount|volume)\\b\\s*(?:=|:)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
@@ -111,10 +187,6 @@ const ENTRY_PATTERNS = [
   new RegExp(`\\bentry\\b\\s*(?:=|:)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
   new RegExp(`\\bprice\\b\\s*(?:=|:)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
   new RegExp(`(?:^|\\s)@\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
-];
-
-const STOP_PATTERNS = [
-  new RegExp(`\\b(?:stop(?:\\s*loss)?|sl)\\b\\s*(?:=|:|@)?\\s*${OPTIONAL_CURRENCY}\\s*${NUMBER_CAPTURE}`, "i"),
 ];
 
 const LEVERAGE_PATTERNS = [
@@ -168,6 +240,59 @@ function parseNumeric(value: string): number | undefined {
 
 function cleanToken(token: string): string {
   return token.replace(/^[^A-Za-z0-9@]+|[^A-Za-z0-9@]+$/g, "");
+}
+
+function limitValueSlice(slice: string): string {
+  const newlineIndex = slice.search(/[\r\n]/);
+  if (newlineIndex >= 0) {
+    return slice.slice(0, newlineIndex);
+  }
+  const limit = Math.min(slice.length, 120);
+  return slice.slice(0, limit);
+}
+
+function normalizeLevelLabel(raw: string): string | undefined {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/[^a-z0-9]+/g, "");
+  return normalized || undefined;
+}
+
+function normalizePercentValue(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!(value > 0)) {
+    return undefined;
+  }
+  const normalized = value / 100;
+  if (normalized > 1) {
+    return 1;
+  }
+  return normalized;
+}
+
+function extractFractionFromSlice(slice: string, inlinePercent?: string): number | undefined {
+  if (inlinePercent !== undefined) {
+    const inlineNumeric = parseNumeric(inlinePercent);
+    const normalized = normalizePercentValue(inlineNumeric);
+    if (normalized !== undefined) {
+      return normalized;
+    }
+  }
+
+  const limited = limitValueSlice(slice);
+  const percentMatch = PERCENT_FINDER_PATTERN.exec(limited);
+  if (percentMatch) {
+    const percentNumeric = parseNumeric(percentMatch[1]);
+    const normalized = normalizePercentValue(percentNumeric);
+    if (normalized !== undefined) {
+      return normalized;
+    }
+  }
+  return undefined;
 }
 
 function parsePositiveInteger(raw: string, label: string): number {
@@ -298,29 +423,218 @@ function extractSingle(text: string, patterns: RegExp[]): number | undefined {
   return undefined;
 }
 
-function extractTakeProfits(text: string): number[] {
-  const pattern = /\b(?:tp\d*|tp|take\s*profit|target)\b/gi;
-  const values: number[] = [];
-  const seen = new Set<string>();
+function extractTakeProfitLevels(text: string): TakeProfitLevel[] {
+  const pattern = TAKE_PROFIT_TOKEN_PATTERN;
   pattern.lastIndex = 0;
+  const levels: TakeProfitLevel[] = [];
+  const seen = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
-    const slice = text.slice(match.index + match[0].length);
-    const numberMatch = TAKE_PROFIT_VALUE_PATTERN.exec(slice);
-    if (!numberMatch) {
+    const labelRaw = match[0];
+    const slice = text.slice(match.index + labelRaw.length);
+    const limited = limitValueSlice(slice);
+    const valueMatch = VALUE_WITH_PERCENT_PATTERN.exec(limited);
+    if (!valueMatch) {
       continue;
     }
-    const numeric = parseNumeric(numberMatch[1]);
-    if (numeric === undefined) {
+    const price = parseNumeric(valueMatch[1]);
+    if (price === undefined) {
       continue;
     }
-    const key = numeric.toString();
-    if (!seen.has(key)) {
-      values.push(numeric);
-      seen.add(key);
+    const fraction = extractFractionFromSlice(limited, valueMatch[2]);
+    const label = normalizeLevelLabel(labelRaw);
+    const key = `${label ?? ""}:${price}:${fraction ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    levels.push({
+      price,
+      sizeFraction: fraction,
+      label,
+    });
+    seen.add(key);
+  }
+  return levels;
+}
+
+function extractStopLevels(text: string): StopLossLevel[] {
+  const pattern = STOP_LEVEL_TOKEN_PATTERN;
+  pattern.lastIndex = 0;
+  const levels: StopLossLevel[] = [];
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const raw = match[0];
+    const slice = text.slice(match.index + raw.length);
+    const limited = limitValueSlice(slice);
+    const valueMatch = VALUE_WITH_PERCENT_PATTERN.exec(limited);
+    if (!valueMatch) {
+      continue;
+    }
+    const price = parseNumeric(valueMatch[1]);
+    if (price === undefined) {
+      continue;
+    }
+    const fraction = extractFractionFromSlice(limited, valueMatch[2]);
+    const label = normalizeLevelLabel(raw);
+    const key = `${label ?? ""}:${price}:${fraction ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    levels.push({
+      price,
+      sizeFraction: fraction,
+      label,
+    });
+    seen.add(key);
+  }
+  return levels;
+}
+
+function normalizeRiskDescriptor(raw: string | undefined): RiskLabel | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw.toLowerCase().replace(/[^a-z]/g, "");
+  if (!normalized) {
+    return undefined;
+  }
+  return RISK_KEYWORD_MAP[normalized];
+}
+
+function extractRiskLabel(text: string): RiskLabel | undefined {
+  for (const pattern of RISK_PATTERNS) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(text);
+    if (!match) {
+      continue;
+    }
+    const candidate = normalizeRiskDescriptor(match[1]);
+    if (candidate) {
+      return candidate;
     }
   }
-  return values;
+  return undefined;
+}
+
+function normalizeTimeframeToken(token: string): string | undefined {
+  const trimmed = token.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+  const compactMatch = /^([0-9]+)([mhdw])$/.exec(trimmed);
+  if (compactMatch) {
+    return `${compactMatch[1]}${compactMatch[2].toLowerCase()}`;
+  }
+
+  const aliasMatch = /^([0-9]+)(?:min|mins|minute|minutes)$/.exec(trimmed);
+  if (aliasMatch) {
+    return `${aliasMatch[1]}m`;
+  }
+  const hourMatch = /^([0-9]+)(?:h|hr|hrs|hour|hours)$/.exec(trimmed);
+  if (hourMatch) {
+    return `${hourMatch[1]}h`;
+  }
+  const dayMatch = /^([0-9]+)(?:d|day|days)$/.exec(trimmed);
+  if (dayMatch) {
+    return `${dayMatch[1]}d`;
+  }
+  const weekMatch = /^([0-9]+)(?:w|week|weeks)$/.exec(trimmed);
+  if (weekMatch) {
+    return `${weekMatch[1]}w`;
+  }
+
+  if (TIMEFRAME_KEYWORD_NORMALIZATION[trimmed]) {
+    return TIMEFRAME_KEYWORD_NORMALIZATION[trimmed];
+  }
+
+  if (trimmed === "daily") {
+    return "1d";
+  }
+  if (trimmed === "weekly") {
+    return "1w";
+  }
+  if (trimmed === "monthly") {
+    return "4w";
+  }
+  if (trimmed === "hourly") {
+    return "1h";
+  }
+
+  return undefined;
+}
+
+function extractTimeframeHints(text: string, tokens: readonly string[]): string[] {
+  const hints = new Set<string>();
+
+  let match: RegExpExecArray | null;
+  const explicitPattern = /\b([0-9]+)\s*([mhdw])\b/gi;
+  explicitPattern.lastIndex = 0;
+  while ((match = explicitPattern.exec(text)) !== null) {
+    hints.add(`${match[1]}${match[2].toLowerCase()}`);
+  }
+
+  const compactPattern = /\b([0-9]+)([mhdw])\b/gi;
+  compactPattern.lastIndex = 0;
+  while ((match = compactPattern.exec(text)) !== null) {
+    hints.add(`${match[1]}${match[2].toLowerCase()}`);
+  }
+
+  WORD_TIMEFRAME_PATTERN.lastIndex = 0;
+  while ((match = WORD_TIMEFRAME_PATTERN.exec(text)) !== null) {
+    const [, valueRaw, unitRaw] = match;
+    const numeric = parseInt(valueRaw, 10);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      continue;
+    }
+    const unit = unitRaw.toLowerCase();
+    if (unit.startsWith("min")) {
+      hints.add(`${numeric}m`);
+    } else if (unit.startsWith("hr") || unit.startsWith("hour")) {
+      hints.add(`${numeric}h`);
+    } else if (unit.startsWith("day")) {
+      hints.add(`${numeric}d`);
+    } else if (unit.startsWith("week")) {
+      hints.add(`${numeric}w`);
+    }
+  }
+
+  const lowerTokens = tokens.map((token) => token.toLowerCase());
+  for (let i = 0; i < lowerTokens.length; ++i) {
+    const token = lowerTokens[i];
+    const normalized = normalizeTimeframeToken(token);
+    if (normalized) {
+      hints.add(normalized);
+      continue;
+    }
+
+    if (token === "tf" || token === "timeframe" || token === "horizon") {
+      const next = lowerTokens[i + 1];
+      if (next) {
+        const direct = normalizeTimeframeToken(next);
+        if (direct) {
+          hints.add(direct);
+        } else if (/^[0-9]+$/.test(next)) {
+          const following = lowerTokens[i + 2];
+          if (following) {
+            const combined = normalizeTimeframeToken(`${next}${following}`);
+            if (combined) {
+              hints.add(combined);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  for (const token of lowerTokens) {
+    const normalized = TIMEFRAME_KEYWORD_NORMALIZATION[token];
+    if (normalized) {
+      hints.add(normalized);
+    }
+  }
+
+  return Array.from(hints);
 }
 
 export function parseTradeSignal(text: string): TradeSignal {
@@ -333,6 +647,9 @@ export function parseTradeSignal(text: string): TradeSignal {
   if (tokens.length === 0) {
     throw new TradeSignalParseError("Signal does not contain recognizable tokens");
   }
+
+  const riskLabel = extractRiskLabel(trimmed);
+  const timeframeHints = extractTimeframeHints(trimmed, tokens);
 
   let side: TradeSide | undefined;
   let sideIndex = -1;
@@ -431,8 +748,9 @@ export function parseTradeSignal(text: string): TradeSignal {
 
   const trailingStopMatch = extractTrailingStop(trimmed);
   const stopScanText = trailingStopMatch?.sanitizedText ?? trimmed;
-  const stopLoss = extractSingle(stopScanText, STOP_PATTERNS);
-  const takeProfits = extractTakeProfits(trimmed);
+  const stopLossLevels = extractStopLevels(stopScanText);
+  const stopLoss = stopLossLevels[0]?.price;
+  const takeProfits = extractTakeProfitLevels(trimmed);
   const leverage = extractSingle(trimmed, LEVERAGE_PATTERNS);
   const trailingStop = trailingStopMatch?.config;
   const entryStrategy: EntryStrategy = extractEntryStrategy(trimmed) ?? { type: "single" };
@@ -441,7 +759,7 @@ export function parseTradeSignal(text: string): TradeSignal {
     execution = "market";
   }
 
-  if (stopLoss === undefined && !trailingStop) {
+  if (stopLossLevels.length === 0 && !trailingStop) {
     throw new TradeSignalParseError("Stop loss is required");
   }
   if (takeProfits.length === 0) {
@@ -455,11 +773,14 @@ export function parseTradeSignal(text: string): TradeSignal {
     size,
     entryPrice,
     stopLoss,
+    stopLosses: stopLossLevels,
     takeProfits,
     leverage,
     execution,
     trailingStop,
     entryStrategy,
+    riskLabel,
+    timeframeHints,
     text: trimmed,
   };
 }
