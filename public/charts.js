@@ -12,27 +12,6 @@ const compactFormatter = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
 });
 
-const layerColorMap = {
-  dark: {
-    entry: "#38bdf8",
-    tp: "#22c55e",
-    sl: "#f87171",
-    candleUp: "#22c55e",
-    candleDown: "#ef4444",
-    text: "#e2e8f0",
-    grid: "rgba(148, 163, 184, 0.12)",
-  },
-  light: {
-    entry: "#1d4ed8",
-    tp: "#16a34a",
-    sl: "#dc2626",
-    candleUp: "#16a34a",
-    candleDown: "#dc2626",
-    text: "#1e293b",
-    grid: "rgba(148, 163, 184, 0.25)",
-  },
-};
-
 const TEXT_PLACEHOLDER = "—";
 
 function formatCurrency(value) {
@@ -75,84 +54,48 @@ function resolveTheme(theme) {
   return theme === "light" ? "light" : "dark";
 }
 
-export function initializeMarketDashboard(options) {
-  const chartElement = options?.chartElement;
-  const heatmapElement = options?.heatmapElement;
-  const layerListElement = options?.layerListElement;
-  const metrics = options?.metrics ?? {};
-  const volatilityHintElement = options?.volatilityHintElement;
-  const signalProvider = options?.signalProvider ?? (() => "");
+function buildSnapshotUrl(symbol, options) {
+  const baseSymbol = (symbol ?? "BTC").toUpperCase();
+  const interval = options?.interval ?? "1h";
+  const range = options?.range ?? "1d";
+  const theme = resolveTheme(options?.theme);
+  const normalizedSymbol = baseSymbol.includes(":") ? baseSymbol : `BINANCE:${baseSymbol}USDT`;
+  const params = new URLSearchParams({
+    symbol: normalizedSymbol,
+    interval,
+    range,
+    theme,
+    format: "png",
+    width: "900",
+    height: "480",
+    nocache: Date.now().toString(),
+  });
+  return `https://quickchart.io/finance/chart?${params.toString()}`;
+}
 
-  if (!chartElement || !heatmapElement || !layerListElement) {
-    return null;
-  }
+export function initializeMarketDashboard(options = {}) {
+  const snapshotImage = options.snapshotImage instanceof HTMLImageElement ? options.snapshotImage : null;
+  const metrics = options.metrics ?? {};
+  const signalProvider = typeof options.signalProvider === "function" ? options.signalProvider : () => "";
 
-  const chartLibrary = window.LightweightCharts;
-  if (!chartLibrary) {
-    console.warn("LightweightCharts library is not loaded. Market dashboard disabled.");
-    return null;
-  }
+  let snapshotOptions = {
+    interval: options.snapshotOptions?.interval ?? "1h",
+    range: options.snapshotOptions?.range ?? "1d",
+  };
 
-  let currentTheme = resolveTheme(options?.theme);
-  let currentSymbol = options?.initialSymbol ?? "BTC";
+  let currentTheme = resolveTheme(options.theme);
+  let currentSymbol = (options.initialSymbol ?? "BTC").toUpperCase();
+  let autoRefreshEnabled = options.autoRefresh ?? true;
+  let refreshIntervalMs = options.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
   let refreshHandle = null;
   let pending = false;
-  let priceLines = [];
-  let cachedLayers = null;
   let destroyed = false;
-  let autoRefreshEnabled = options?.autoRefresh ?? true;
-  let refreshIntervalMs = options?.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
   const snapshotCache = new Map();
 
-  const chart = chartLibrary.createChart(chartElement, {
-    width: chartElement.clientWidth,
-    height: chartElement.clientHeight,
-    layout: { background: { color: "transparent" }, textColor: layerColorMap[currentTheme].text },
-    rightPriceScale: { borderVisible: false },
-    timeScale: { borderVisible: false },
-    crosshair: { mode: chartLibrary.CrosshairMode.Normal },
-    grid: {
-      horzLines: { color: layerColorMap[currentTheme].grid },
-      vertLines: { color: layerColorMap[currentTheme].grid },
-    },
-  });
-
-  const candleSeries = chart.addCandlestickSeries({
-    priceScaleId: "right",
-    upColor: layerColorMap[currentTheme].candleUp,
-    borderUpColor: layerColorMap[currentTheme].candleUp,
-    wickUpColor: layerColorMap[currentTheme].candleUp,
-    downColor: layerColorMap[currentTheme].candleDown,
-    borderDownColor: layerColorMap[currentTheme].candleDown,
-    wickDownColor: layerColorMap[currentTheme].candleDown,
-    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
-  });
-
-  function applyTheme(theme) {
-    currentTheme = resolveTheme(theme);
-    const palette = layerColorMap[currentTheme];
-    chart.applyOptions({
-      layout: { background: { color: "transparent" }, textColor: palette.text },
-      grid: {
-        horzLines: { color: palette.grid },
-        vertLines: { color: palette.grid },
-      },
-    });
-    candleSeries.applyOptions({
-      upColor: palette.candleUp,
-      borderUpColor: palette.candleUp,
-      wickUpColor: palette.candleUp,
-      downColor: palette.candleDown,
-      borderDownColor: palette.candleDown,
-      wickDownColor: palette.candleDown,
-    });
-    renderLayers(cachedLayers);
-  }
-
-function updateMetrics(snapshot) {
-  if (metrics.symbol) {
-    metrics.symbol.textContent = snapshot?.symbol ?? TEXT_PLACEHOLDER;
-  }
+  function updateMetrics(snapshot) {
+    if (metrics.symbol) {
+      metrics.symbol.textContent = snapshot?.symbol ?? TEXT_PLACEHOLDER;
+    }
     if (metrics.mid) {
       metrics.mid.textContent = formatCurrency(snapshot?.midPrice);
     }
@@ -168,128 +111,42 @@ function updateMetrics(snapshot) {
     if (metrics.volume) {
       metrics.volume.textContent = formatVolume(snapshot?.dayBaseVolume);
     }
-  if (metrics.updated) {
-    const timestamp = snapshot?.timestamp;
-    metrics.updated.textContent = timestamp
-      ? new Date(timestamp).toLocaleTimeString()
-      : TEXT_PLACEHOLDER;
-  }
-  if (metrics.modeBadge) {
+    if (metrics.updated) {
+      const timestamp = snapshot?.timestamp;
+      metrics.updated.textContent = timestamp ? new Date(timestamp).toLocaleTimeString() : TEXT_PLACEHOLDER;
+    }
+    if (metrics.modeBadge) {
       const demoMode = Boolean(snapshot?.demoMode);
       metrics.modeBadge.textContent = demoMode ? "Demo data" : "Live data";
       metrics.modeBadge.classList.toggle("badge--demo", demoMode);
       metrics.modeBadge.classList.toggle("badge--live", !demoMode);
     }
-  if (volatilityHintElement) {
-    volatilityHintElement.textContent = snapshot?.volatilityHint ?? TEXT_PLACEHOLDER;
-  }
-}
-
-  function clearPriceLines() {
-    priceLines.forEach((line) => {
-      candleSeries.removePriceLine(line);
-    });
-    priceLines = [];
   }
 
-  function renderLayers(layers) {
-    cachedLayers = layers ?? null;
-    clearPriceLines();
-    layerListElement.innerHTML = "";
-    if (!layers) {
+  function updateSnapshotImage(symbol, { force = false } = {}) {
+    if (!snapshotImage) {
       return;
     }
-
-    const palette = layerColorMap[currentTheme];
-
-    const addLayer = (price, type, title) => {
-      if (!(price > 0)) {
-        return;
-      }
-      const color = type === "entry" ? palette.entry : type === "tp" ? palette.tp : palette.sl;
-      const priceLine = candleSeries.createPriceLine({
-        price,
-        color,
-        lineWidth: 2,
-        axisLabelVisible: true,
-        title,
-      });
-      priceLines.push(priceLine);
-
-      const item = document.createElement("li");
-      const label = document.createElement("span");
-      label.className = "layer-summary__label";
-      label.dataset.layer = type;
-      label.textContent = title;
-
-      const value = document.createElement("span");
-      value.textContent = formatCurrency(price);
-
-      item.append(label, value);
-      layerListElement.appendChild(item);
-    };
-
-    (layers.entries ?? []).forEach((price, index) => {
-      addLayer(price, "entry", `Entry ${index + 1}`);
+    const url = buildSnapshotUrl(symbol ?? currentSymbol, {
+      interval: snapshotOptions.interval,
+      range: snapshotOptions.range,
+      theme: currentTheme,
     });
-    (layers.takeProfits ?? []).forEach((price, index) => {
-      addLayer(price, "tp", `TP ${index + 1}`);
-    });
-    (layers.stopLosses ?? []).forEach((price, index) => {
-      addLayer(price, "sl", index === 0 ? "Stop" : `Stop ${index + 1}`);
-    });
-  }
-
-  function renderHeatmap(buckets) {
-    heatmapElement.innerHTML = "";
-    if (!Array.isArray(buckets) || buckets.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "volatility-hint";
-      empty.textContent = "No volume distribution available.";
-      heatmapElement.appendChild(empty);
+    if (!force && snapshotImage.src === url) {
       return;
     }
-
-    const maxVolume = Math.max(...buckets.map((bucket) => bucket.volume || 0), 0.0001);
-
-    buckets.forEach((bucket) => {
-      const cell = document.createElement("div");
-      cell.className = "heatmap-cell";
-      const intensity = Math.max(0.15, Math.min(1, (bucket.volume ?? 0) / maxVolume));
-      cell.style.setProperty("--intensity", intensity.toFixed(2));
-
-      const priceSpan = document.createElement("span");
-      priceSpan.textContent = formatCurrency(bucket.price);
-      const volumeStrong = document.createElement("strong");
-      volumeStrong.textContent = formatVolume(bucket.volume);
-
-      cell.append(priceSpan, volumeStrong);
-      heatmapElement.appendChild(cell);
-    });
-  }
-
-function applySnapshot(snapshot) {
-    if (!snapshot) {
-      return;
-    }
-    const normalized = (snapshot.normalizedSymbol ?? currentSymbol ?? "").toUpperCase();
-    if (normalized) {
-      currentSymbol = normalized;
-      snapshotCache.set(normalized, snapshot);
-    }
-    candleSeries.setData(Array.isArray(snapshot.candles) ? snapshot.candles : []);
-    updateMetrics(snapshot);
-    renderHeatmap(snapshot.volumeDistribution ?? []);
-    renderLayers(snapshot.layers);
+    snapshotImage.src = url;
+    snapshotImage.alt = `Market snapshot for ${symbol ?? currentSymbol} (${snapshotOptions.interval})`;
   }
 
   async function fetchSymbolSnapshot(symbol) {
     const resolvedSymbol = (symbol ?? currentSymbol ?? "BTC").toUpperCase();
+    const payload = { symbol: resolvedSymbol, interval: snapshotOptions.interval, range: snapshotOptions.range };
     const signal = signalProvider()?.trim();
-    const payload = { symbol: resolvedSymbol };
     if (signal) {
       payload.signal = signal;
     }
+
     const response = await fetch("/api/market-data", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -299,21 +156,35 @@ function applySnapshot(snapshot) {
     if (!response.ok) {
       throw new Error(typeof data?.error === "string" ? data.error : "Request failed");
     }
+
     const cacheKey = (data.normalizedSymbol ?? resolvedSymbol).toUpperCase();
     snapshotCache.set(cacheKey, data);
     return data;
   }
 
-  async function fetchSnapshot(immediate = false, symbolOverride) {
+  function scheduleRefresh(delay = refreshIntervalMs) {
+    if (destroyed || !autoRefreshEnabled) {
+      return;
+    }
+    if (refreshHandle) {
+      window.clearTimeout(refreshHandle);
+    }
+    refreshHandle = window.setTimeout(() => {
+      void refresh();
+    }, delay);
+  }
+
+  async function refresh(symbolOverride, { immediate = false } = {}) {
     if (pending || destroyed) {
       return;
     }
     pending = true;
     try {
-      const targetSymbol = (symbolOverride ?? currentSymbol ?? options?.initialSymbol ?? "BTC").toUpperCase();
+      const targetSymbol = (symbolOverride ?? currentSymbol ?? "BTC").toUpperCase();
       const snapshot = await fetchSymbolSnapshot(targetSymbol);
       currentSymbol = (snapshot.normalizedSymbol ?? targetSymbol).toUpperCase();
-      applySnapshot(snapshot);
+      updateMetrics(snapshot);
+      updateSnapshotImage(currentSymbol, { force: true });
       scheduleRefresh(refreshIntervalMs);
     } catch (error) {
       console.error("Failed to load market data", error);
@@ -329,36 +200,15 @@ function applySnapshot(snapshot) {
     }
   }
 
-  function scheduleRefresh(delay = refreshIntervalMs) {
-    if (destroyed || !autoRefreshEnabled) {
-      return;
-    }
-    if (refreshHandle) {
-      window.clearTimeout(refreshHandle);
-    }
-    refreshHandle = window.setTimeout(() => {
-      fetchSnapshot();
-    }, delay);
-  }
-
-  function handleResize() {
-    if (destroyed) {
-      return;
-    }
-    const { clientWidth, clientHeight } = chartElement;
-    chart.resize(clientWidth, clientHeight);
-  }
-
-  window.addEventListener("resize", handleResize);
-
-  fetchSnapshot(true);
+  void refresh(currentSymbol, { immediate: true });
 
   return {
     setTheme(theme) {
-      applyTheme(theme);
+      currentTheme = resolveTheme(theme);
+      updateSnapshotImage(currentSymbol, { force: true });
     },
     scheduleRefresh() {
-      fetchSnapshot(true);
+      void refresh(currentSymbol, { immediate: true });
     },
     setSymbol(symbol) {
       const normalized = typeof symbol === "string" ? symbol.trim().toUpperCase() : "";
@@ -368,9 +218,10 @@ function applySnapshot(snapshot) {
       currentSymbol = normalized;
       const cached = snapshotCache.get(normalized);
       if (cached) {
-        applySnapshot(cached);
+        updateMetrics(cached);
+        updateSnapshotImage(normalized, { force: true });
       }
-      fetchSnapshot(true, normalized);
+      void refresh(normalized, { immediate: true });
     },
     async preloadSymbols(symbols) {
       const list = Array.isArray(symbols) ? symbols : [];
@@ -399,15 +250,31 @@ function applySnapshot(snapshot) {
       }
     },
     triggerRefresh(symbol) {
-      fetchSnapshot(true, symbol);
+      void refresh(symbol ?? currentSymbol, { immediate: true });
+    },
+    setSnapshotOptions(options) {
+      const next = { ...snapshotOptions };
+      if (options?.interval) {
+        next.interval = options.interval;
+      }
+      if (options?.range) {
+        next.range = options.range;
+      }
+      snapshotOptions = next;
+      updateSnapshotImage(currentSymbol, { force: true });
+    },
+    captureSnapshot({ symbol, force = true } = {}) {
+      if (force) {
+        void refresh(symbol ?? currentSymbol, { immediate: true });
+      } else {
+        updateSnapshotImage(symbol ?? currentSymbol, { force: true });
+      }
     },
     destroy() {
       destroyed = true;
       if (refreshHandle) {
         window.clearTimeout(refreshHandle);
       }
-      window.removeEventListener("resize", handleResize);
-      chart.remove();
     },
   };
 }

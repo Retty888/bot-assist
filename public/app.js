@@ -29,10 +29,14 @@ const marketFunding = document.getElementById("market-funding");
 const marketVolume = document.getElementById("market-volume");
 const marketUpdated = document.getElementById("market-updated");
 const marketModeBadge = document.getElementById("market-mode-badge");
-const priceChartElement = document.getElementById("price-chart");
-const heatmapElement = document.getElementById("volume-heatmap");
-const layerSummaryElement = document.getElementById("layer-summary");
-const volatilityHintElement = document.getElementById("volatility-hint");
+const chartSnapshotImage = document.getElementById("chart-snapshot");
+const snapshotCaption = document.getElementById("snapshot-caption");
+const snapshotIntervalSelect = document.getElementById("snapshot-interval");
+const snapshotRangeSelect = document.getElementById("snapshot-range");
+const snapshotRefreshButton = document.getElementById("snapshot-refresh");
+const chartSignalSelect = document.getElementById("chart-signal-select");
+const signalSpotlightDetails = document.getElementById("signal-spotlight-details");
+const spotlightLoadButton = document.getElementById("spotlight-load");
 const hintContextElements = {
   symbol: document.getElementById("hint-symbol"),
   price: document.getElementById("hint-price"),
@@ -48,6 +52,7 @@ const autoRefreshLabel = document.getElementById("auto-refresh-label");
 const refreshNowButton = document.getElementById("refresh-now");
 
 const sampleSignalList = document.getElementById("sample-signal-list");
+const potentialSignalList = document.getElementById("potential-signal-list");
 const demoPositionRows = document.getElementById("demo-position-rows");
 const symbolChips = Array.from(document.querySelectorAll(".symbol-chip"));
 const historyList = document.getElementById("history-list");
@@ -70,6 +75,8 @@ const positionRefreshButton = document.getElementById("position-refresh");
 const positionDeleteButton = document.getElementById("position-delete");
 
 const UI_PLACEHOLDER = "—";
+const DEFAULT_SPOTLIGHT_MESSAGE = "Pick a signal to review its context and modules.";
+const DEFAULT_SNAPSHOT_CAPTION = "Select a signal to capture its market context.";
 
 const usdFormatter = new Intl.NumberFormat(undefined, {
   style: "currency",
@@ -121,6 +128,7 @@ const trailEntryStepUnitSelect = document.getElementById("trail-entry-step-unit"
 
 let cachedDefaultSignal = "";
 let marketDashboard = null;
+let focusedSignalId = null;
 
 const THEME_STORAGE_KEY = "hl-theme";
 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
@@ -194,7 +202,7 @@ function createDefaultFeatureState() {
 
 const featureState = createDefaultFeatureState();
 
-const DEMO_SIGNALS = [
+const SIGNAL_LIBRARY = [
   {
     id: "btc-breakout",
     label: "BTC ladder breakout",
@@ -206,6 +214,8 @@ const DEMO_SIGNALS = [
       trailingStop: { value: 0.4, unit: "percent" },
       grid: { levels: 3, spacingValue: 120, unit: "absolute" },
     },
+    category: "playbook",
+    origin: "manual",
   },
   {
     id: "eth-momentum",
@@ -218,6 +228,8 @@ const DEMO_SIGNALS = [
       trailingStop: { value: 0.6, unit: "percent" },
       trailEntry: { levels: 4, stepValue: 0.35, unit: "percent" },
     },
+    category: "playbook",
+    origin: "manual",
   },
   {
     id: "btc-swing",
@@ -229,8 +241,42 @@ const DEMO_SIGNALS = [
     preset: {
       trailingStop: { value: 1, unit: "percent" },
     },
+    category: "playbook",
+    origin: "manual",
+  },
+  {
+    id: "algo-btc-vwap",
+    label: "BTC VWAP pullback scout",
+    description: "Algo: 15m rejection + grid ×2 @ 0.6% with 0.5% trail stop",
+    symbol: "BTC",
+    text:
+      "Long BTC size 2 entry 60120 stop 59200 tp1 61200 tp2 62000 grid 2 0.6% trailing stop 0.5% watchlist potential",
+    preset: {
+      trailingStop: { value: 0.5, unit: "percent" },
+      grid: { levels: 2, spacingValue: 0.6, unit: "percent" },
+    },
+    category: "potential",
+    origin: "algo",
+  },
+  {
+    id: "desk-eth-news",
+    label: "ETH news breakout watch",
+    description: "Manual: monitor news impulse with trailing ladder",
+    symbol: "ETH",
+    text:
+      "Long ETH 3 entry 3580 stop 3460 tp1 3740 tp2 3820 trail entry 3 0.25% trailing stop 0.8% news breakout",
+    preset: {
+      trailingStop: { value: 0.8, unit: "percent" },
+      trailEntry: { levels: 3, stepValue: 0.25, unit: "percent" },
+    },
+    category: "potential",
+    origin: "manual",
   },
 ];
+
+const signalMap = new Map(SIGNAL_LIBRARY.map((signal) => [signal.id, signal]));
+const playbookSignals = SIGNAL_LIBRARY.filter((signal) => signal.category === "playbook");
+const potentialSignals = SIGNAL_LIBRARY.filter((signal) => signal.category === "potential");
 
 let hintManager = null;
 const REFRESH_STORAGE_KEY = "hl-market-refresh";
@@ -297,6 +343,138 @@ function formatDistance(value, unit) {
     return `${numeric} bps`;
   }
   return numeric;
+}
+
+function summarizePreset(preset) {
+  if (!preset) {
+    return "None";
+  }
+  const parts = [];
+  if (preset.trailingStop) {
+    const { value, unit } = preset.trailingStop;
+    const formatted = formatDistance(value, unit);
+    if (formatted) {
+      parts.push(`Trailing stop ${formatted}`);
+    }
+  }
+  if (preset.grid) {
+    const { levels, spacingValue, unit } = preset.grid;
+    const formatted = formatDistance(spacingValue, unit);
+    if (formatted) {
+      parts.push(`Grid ${levels} @ ${formatted}`);
+    }
+  }
+  if (preset.trailEntry) {
+    const { levels, stepValue, unit } = preset.trailEntry;
+    const formatted = formatDistance(stepValue, unit);
+    if (formatted) {
+      parts.push(`Trailing entries ${levels} @ ${formatted}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(" · ") : "None";
+}
+
+function loadSignalIntoEditor(signal) {
+  if (!signal) {
+    return;
+  }
+  textarea.value = signal.text;
+  applyFeaturePreset(signal.preset);
+  const symbol = signal.symbol ?? "BTC";
+  setActiveSymbolChip(symbol);
+  if (signal.symbol) {
+    marketDashboard?.setSymbol(signal.symbol);
+  } else {
+    marketDashboard?.scheduleRefresh();
+  }
+  textarea.focus();
+}
+
+function renderSignalSpotlight(signal) {
+  if (!signalSpotlightDetails) {
+    return;
+  }
+  signalSpotlightDetails.innerHTML = "";
+  if (!signal) {
+    signalSpotlightDetails.textContent = DEFAULT_SPOTLIGHT_MESSAGE;
+    return;
+  }
+  const title = document.createElement("strong");
+  title.textContent = signal.label;
+  const description = document.createElement("p");
+  description.textContent = signal.description ?? "—";
+  const meta = document.createElement("ul");
+  meta.className = "spotlight-meta";
+  const rows = [
+    { label: "Symbol", value: signal.symbol ?? UI_PLACEHOLDER },
+    {
+      label: "Source",
+      value: signal.origin === "algo" ? "Algorithmic suggestion" : "Manual idea",
+    },
+    { label: "Preset", value: summarizePreset(signal.preset) },
+  ];
+
+  rows.forEach((row) => {
+    const item = document.createElement("li");
+    const label = document.createElement("strong");
+    label.textContent = row.label;
+    const value = document.createElement("span");
+    value.textContent = row.value;
+    item.append(label, document.createTextNode(": "), value);
+    meta.appendChild(item);
+  });
+
+  signalSpotlightDetails.append(title, description, meta);
+}
+
+function updateSnapshotCaptionText(signal) {
+  if (!snapshotCaption) {
+    return;
+  }
+  if (!signal) {
+    snapshotCaption.textContent = DEFAULT_SNAPSHOT_CAPTION;
+    return;
+  }
+  const interval = snapshotIntervalSelect?.value ?? "1h";
+  const rangeValue = snapshotRangeSelect?.value ?? "";
+  const rangeLabels = {
+    "1d": "1 day",
+    "5d": "5 days",
+    "1m": "1 month",
+  };
+  const rangeLabel = rangeLabels[rangeValue] ?? (rangeValue ? rangeValue : "custom range");
+  const symbol = signal.symbol ?? signal.label;
+  snapshotCaption.textContent = `${symbol} • ${interval} interval • ${rangeLabel}`;
+}
+
+function focusSignal(signalId, options = {}) {
+  const { load = false, syncSelect = true, refreshSnapshot = true } = options;
+  const signal = signalId ? signalMap.get(signalId) ?? null : null;
+  focusedSignalId = signal ? signal.id : null;
+
+  if (chartSignalSelect && syncSelect) {
+    chartSignalSelect.value = signal ? signal.id : "";
+  }
+
+  renderSignalSpotlight(signal);
+  updateSnapshotCaptionText(signal ?? null);
+
+  if (signal?.symbol && !load) {
+    setActiveSymbolChip(signal.symbol);
+    marketDashboard?.setSymbol(signal.symbol);
+  }
+
+  if (signal && load) {
+    loadSignalIntoEditor(signal);
+  }
+
+  if (refreshSnapshot) {
+    marketDashboard?.captureSnapshot({ symbol: signal?.symbol, force: true });
+  }
+
+  if (!signal && refreshSnapshot) {
+    marketDashboard?.captureSnapshot({ force: true });
+  }
 }
 
 function buildFeatureSegments() {
@@ -521,22 +699,77 @@ function renderSampleSignals() {
     return;
   }
   sampleSignalList.innerHTML = "";
-  DEMO_SIGNALS.forEach((signal) => {
+  playbookSignals.forEach((signal) => {
     const button = document.createElement("button");
     button.type = "button";
     button.innerHTML = `<strong>${signal.label}</strong><span>${signal.description}</span>`;
     button.addEventListener("click", () => {
-      textarea.value = signal.text;
-      applyFeaturePreset(signal.preset);
-      if (signal.symbol) {
-        setActiveSymbolChip(signal.symbol);
-        marketDashboard?.setSymbol(signal.symbol);
-      } else {
-        marketDashboard?.scheduleRefresh();
-      }
-      textarea.focus();
+      focusSignal(signal.id, { load: true });
     });
     sampleSignalList.appendChild(button);
+  });
+}
+
+function renderPotentialSignals() {
+  if (!potentialSignalList) {
+    return;
+  }
+  potentialSignalList.innerHTML = "";
+  if (potentialSignals.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "reference-lede";
+    empty.textContent = "No potential signals pending review.";
+    potentialSignalList.appendChild(empty);
+    return;
+  }
+  potentialSignals.forEach((signal) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.innerHTML = `<strong>${signal.label}</strong><span>${signal.description}</span><small>${
+      signal.origin === "algo" ? "Algorithmic suggestion" : "Manual idea"
+    }</small>`;
+    button.addEventListener("click", () => {
+      focusSignal(signal.id, { load: false });
+    });
+    potentialSignalList.appendChild(button);
+  });
+}
+
+function renderSignalSelect() {
+  if (!chartSignalSelect) {
+    return;
+  }
+  chartSignalSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select signal";
+  if (!focusedSignalId) {
+    placeholder.selected = true;
+  }
+  chartSignalSelect.appendChild(placeholder);
+
+  const groups = [
+    { label: "Curated playbook", items: playbookSignals },
+    { label: "Potential watchlist", items: potentialSignals },
+  ];
+
+  groups.forEach((group) => {
+    if (!group.items || group.items.length === 0) {
+      return;
+    }
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.label;
+    group.items.forEach((signal) => {
+      const option = document.createElement("option");
+      option.value = signal.id;
+      const suffix = signal.symbol ? ` (${signal.symbol})` : "";
+      option.textContent = `${signal.label}${suffix}`;
+      if (focusedSignalId === signal.id) {
+        option.selected = true;
+      }
+      optgroup.appendChild(option);
+    });
+    chartSignalSelect.appendChild(optgroup);
   });
 }
 
@@ -927,8 +1160,38 @@ symbolChips.forEach((chip) => {
       return;
     }
     setActiveSymbolChip(symbol);
+    focusSignal(null, { refreshSnapshot: false });
     marketDashboard?.setSymbol(symbol);
   });
+});
+
+chartSignalSelect?.addEventListener("change", () => {
+  const value = chartSignalSelect.value;
+  focusSignal(value || null, { load: false, syncSelect: false });
+});
+
+spotlightLoadButton?.addEventListener("click", () => {
+  if (!focusedSignalId) {
+    textarea.focus();
+    return;
+  }
+  focusSignal(focusedSignalId, { load: true, refreshSnapshot: false });
+});
+
+snapshotIntervalSelect?.addEventListener("change", () => {
+  marketDashboard?.setSnapshotOptions({ interval: snapshotIntervalSelect.value });
+  updateSnapshotCaptionText(signalMap.get(focusedSignalId) ?? null);
+  marketDashboard?.captureSnapshot({ force: true });
+});
+
+snapshotRangeSelect?.addEventListener("change", () => {
+  marketDashboard?.setSnapshotOptions({ range: snapshotRangeSelect.value });
+  updateSnapshotCaptionText(signalMap.get(focusedSignalId) ?? null);
+  marketDashboard?.captureSnapshot({ force: true });
+});
+
+snapshotRefreshButton?.addEventListener("click", () => {
+  marketDashboard?.captureSnapshot({ force: true });
 });
 
 historyClearButton?.addEventListener("click", () => {
@@ -1018,6 +1281,9 @@ renderPositions();
 void fetchPositionsFromServer();
 void syncHistoryFromServer();
 renderSampleSignals();
+renderPotentialSignals();
+renderSignalSelect();
+focusSignal(null, { refreshSnapshot: false });
 setActiveSymbolChip("BTC");
 
 async function fetchDefaultSignal() {
@@ -1447,6 +1713,7 @@ resetButton.addEventListener("click", () => {
   resetFeatures();
   setActiveSymbolChip("BTC");
   marketDashboard?.setSymbol("BTC");
+  focusSignal(null, { refreshSnapshot: false });
   statusMessage.className = "status-message";
   statusMessage.textContent = "Ready when you are.";
   setModePlaceholder();
@@ -1457,31 +1724,21 @@ resetButton.addEventListener("click", () => {
 });
 
 sampleButton.addEventListener("click", () => {
-  const sample = DEMO_SIGNALS[0];
+  const sample = playbookSignals[0] ?? SIGNAL_LIBRARY[0];
   if (!sample) {
     textarea.focus();
     return;
   }
-  textarea.value = sample.text;
-  applyFeaturePreset(sample.preset);
-  setActiveSymbolChip(sample.symbol ?? "BTC");
-  if (sample.symbol) {
-    marketDashboard?.setSymbol(sample.symbol);
-  } else {
-    marketDashboard?.scheduleRefresh();
-  }
-  textarea.focus();
+  focusSignal(sample.id, { load: true });
 });
 
 initializeTheme();
 
 marketDashboard =
-  priceChartElement && heatmapElement && layerSummaryElement
+  chartSnapshotImage
     ? initializeMarketDashboard({
-        chartElement: priceChartElement,
-        heatmapElement,
-        layerListElement: layerSummaryElement,
-        volatilityHintElement,
+        snapshotImage: chartSnapshotImage,
+        snapshotCaption,
         signalProvider: () => textarea.value,
         metrics: {
           symbol: marketSymbol,
@@ -1495,6 +1752,10 @@ marketDashboard =
         },
         theme: body.dataset.theme,
         initialSymbol: "BTC",
+        snapshotOptions: {
+          interval: snapshotIntervalSelect?.value ?? "1h",
+          range: snapshotRangeSelect?.value ?? "1d",
+        },
       })
     : null;
 
