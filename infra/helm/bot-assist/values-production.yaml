@@ -1,0 +1,13 @@
+image:
+  tag: production
+
+replicaCount: 4
+
+env:
+  NODE_ENV: production
+  LOG_LEVEL: info
+  API_BASE_URL: https://api.hyperliquid.example
+
+alerting:
+  latencyThreshold: 1
+  errorRateThreshold: 0.02

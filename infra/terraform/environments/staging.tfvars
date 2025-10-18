@@ -1,0 +1,13 @@
+aws_region               = "us-east-1"
+cluster_name             = "bot-assist-staging"
+vpc_id                   = "vpc-xxxxxxxx"
+private_subnet_ids       = ["subnet-aaaaaaaa", "subnet-bbbbbbbb"]
+node_instance_type       = "m6i.large"
+node_desired_capacity    = 2
+node_min_capacity        = 1
+node_max_capacity        = 3
+namespace                = "bot-assist"
+bot_assist_chart_version = "0.1.0"
+monitoring_namespace     = "monitoring"
+enable_slack_alerts      = true
+slack_webhook_secret_name = "slack-alert-webhook"

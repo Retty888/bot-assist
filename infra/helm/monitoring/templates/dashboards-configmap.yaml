@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bot-assist-grafana-dashboards
+  labels:
+    grafana_dashboard: "1"
+data:
+  bot-assist-overview.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Request Latency",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job='bot-assist'}[5m])) by (le))"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Error Rate",
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job='bot-assist',status=~'5..'}[5m])) / sum(rate(http_requests_total{job='bot-assist'}[5m]))"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 36,
+      "title": "Bot Assist Overview",
+      "version": 1
+    }

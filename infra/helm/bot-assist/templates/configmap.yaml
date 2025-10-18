@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bot-assist.fullname" . }}-config
+  labels:
+    {{- include "bot-assist.labels" . | nindent 4 }}
+data:
+  ALERT_LATENCY_THRESHOLD: "{{ .Values.alerting.latencyThreshold }}"
+  ALERT_ERROR_RATE_THRESHOLD: "{{ .Values.alerting.errorRateThreshold }}"

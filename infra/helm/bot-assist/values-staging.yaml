@@ -1,0 +1,13 @@
+image:
+  tag: staging
+
+replicaCount: 2
+
+env:
+  NODE_ENV: staging
+  LOG_LEVEL: debug
+  API_BASE_URL: https://staging.api.hyperliquid.example
+
+alerting:
+  latencyThreshold: 2
+  errorRateThreshold: 0.1

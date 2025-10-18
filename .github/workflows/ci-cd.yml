@@ -1,0 +1,239 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lint_test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+  build_and_publish:
+    name: Build & Publish Artifact
+    runs-on: ubuntu-latest
+    needs: lint_test
+    outputs:
+      image_repository: ${{ steps.metadata.outputs.repository }}
+      image_tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-assist-dist
+          path: dist
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push container image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export deployment metadata
+        id: metadata
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "repository=ghcr.io/${GITHUB_REPOSITORY}" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+
+  deploy_staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build_and_publish
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: https://staging.hyperliquid.example
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install SOPS
+        uses: mdgreenwald/mozilla-sops-action@v1.6.0
+
+      - name: Set up kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${{ secrets.STAGING_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
+            -backend-config="key=bot-assist/staging/terraform.tfstate" \
+            -backend-config="region=${{ secrets.AWS_REGION }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Workspace
+        working-directory: infra/terraform
+        run: terraform workspace select staging || terraform workspace new staging
+
+      - name: Terraform Plan
+        working-directory: infra/terraform
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          APP_SECRET=$(sops --decrypt --extract '["data"]["SECRET_CONFIG"]' ../secrets/secrets.enc.yaml)
+          terraform plan \
+            -var-file=environments/staging.tfvars \
+            -var="image_repository=${{ needs.build_and_publish.outputs.image_repository }}" \
+            -var="image_tag=${{ needs.build_and_publish.outputs.image_tag }}" \
+            -var="app_secret_payload=${APP_SECRET}"
+
+      - name: Terraform Apply
+        working-directory: infra/terraform
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          APP_SECRET=$(sops --decrypt --extract '["data"]["SECRET_CONFIG"]' ../secrets/secrets.enc.yaml)
+          terraform apply -auto-approve \
+            -var-file=environments/staging.tfvars \
+            -var="image_repository=${{ needs.build_and_publish.outputs.image_repository }}" \
+            -var="image_tag=${{ needs.build_and_publish.outputs.image_tag }}" \
+            -var="app_secret_payload=${APP_SECRET}"
+
+  deploy_production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy_staging
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://hyperliquid.example
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install SOPS
+        uses: mdgreenwald/mozilla-sops-action@v1.6.0
+
+      - name: Set up kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${{ secrets.PRODUCTION_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
+            -backend-config="key=bot-assist/production/terraform.tfstate" \
+            -backend-config="region=${{ secrets.AWS_REGION }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Workspace
+        working-directory: infra/terraform
+        run: terraform workspace select production || terraform workspace new production
+
+      - name: Terraform Plan
+        working-directory: infra/terraform
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          APP_SECRET=$(sops --decrypt --extract '["data"]["SECRET_CONFIG"]' ../secrets/secrets.enc.yaml)
+          terraform plan \
+            -var-file=environments/production.tfvars \
+            -var="image_repository=${{ needs.build_and_publish.outputs.image_repository }}" \
+            -var="image_tag=${{ needs.build_and_publish.outputs.image_tag }}" \
+            -var="app_secret_payload=${APP_SECRET}"
+
+      - name: Terraform Apply
+        working-directory: infra/terraform
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          APP_SECRET=$(sops --decrypt --extract '["data"]["SECRET_CONFIG"]' ../secrets/secrets.enc.yaml)
+          terraform apply -auto-approve \
+            -var-file=environments/production.tfvars \
+            -var="image_repository=${{ needs.build_and_publish.outputs.image_repository }}" \
+            -var="image_tag=${{ needs.build_and_publish.outputs.image_tag }}" \
+            -var="app_secret_payload=${APP_SECRET}"
