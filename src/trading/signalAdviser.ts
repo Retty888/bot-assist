@@ -34,11 +34,38 @@ const TIMEFRAME_KEYWORDS: Record<string, number> = {
   position: 10_080,
 };
 
+function normalizePositive(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number") {
+    return fallback;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return value;
+}
+
+function normalizeBound(
+  value: number | undefined,
+  fallback: number,
+  { allowZero = false }: { readonly allowZero?: boolean } = {},
+): number {
+  if (typeof value !== "number") {
+    return fallback;
+  }
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  if (!allowZero && value <= 0) {
+    return fallback;
+  }
+  return value;
+}
+
 export function adviseSignal(signal: TradeSignal, options: SignalAdviceOptions = {}): SignalAdvice {
   const notes: string[] = [];
 
-  const baselineLeverage = signal.leverage ?? options.defaultLeverage ?? 5;
-  const volatilityBias = options.volatilityBias ?? 1;
+  const baselineLeverage = normalizePositive(signal.leverage, normalizePositive(options.defaultLeverage, 5));
+  const volatilityBias = normalizeBound(options.volatilityBias, 1, { allowZero: false });
   let leverage = baselineLeverage;
 
   if (signal.riskLabel && RISK_MULTIPLIERS[signal.riskLabel] !== undefined) {
@@ -65,8 +92,8 @@ export function adviseSignal(signal: TradeSignal, options: SignalAdviceOptions =
     notes.push(`Volatility bias ${volatilityBias.toFixed(2)} applied to leverage`);
   }
 
-  const providedMin = options.minLeverage ?? 1;
-  const providedMax = options.maxLeverage ?? 25;
+  const providedMin = normalizeBound(options.minLeverage, 1, { allowZero: false });
+  const providedMax = normalizeBound(options.maxLeverage, 25, { allowZero: false });
   const minLeverage = Math.min(providedMin, providedMax);
   const maxLeverage = Math.max(providedMin, providedMax);
   let recommendedLeverage = clamp(leverage, minLeverage, maxLeverage);
