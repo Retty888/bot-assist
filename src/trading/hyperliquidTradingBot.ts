@@ -54,6 +54,7 @@ interface EntryOrderPlan {
 
 const DEFAULT_SLIPPAGE_BPS = 50; // 0.5%
 const DEFAULT_CACHE_TTL_MS = 5_000;
+const FRACTION_TOLERANCE = 1e-6;
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected value: ${value as unknown as string}`);
@@ -211,14 +212,22 @@ export class HyperliquidTradingBot {
     });
 
     const exitSide = oppositeSide(signal.side);
-    const tpSizes = this.splitTakeProfitSizes(signal.size, signal.takeProfits.length, asset.sizeDecimals);
+    const takeProfitUnits = this.allocateLevelUnits(signal.size, signal.takeProfits, asset.sizeDecimals);
+    const factor = 10 ** asset.sizeDecimals;
+    let takeProfitOrders = 0;
     signal.takeProfits.forEach((target, index) => {
-      const formattedTarget = this.formatPrice(target);
+      const units = takeProfitUnits[index];
+      if (!(units > 0)) {
+        throw new Error("Unable to allocate size for take profit levels with current precision");
+      }
+      const formattedTarget = this.formatPrice(target.price);
+      const sizeValue = units / factor;
+      const formattedSize = this.formatSize(sizeValue, asset.sizeDecimals);
       orders.push({
         a: asset.id,
         b: exitSide,
         p: formattedTarget,
-        s: tpSizes[index],
+        s: formattedSize,
         r: true,
         t: {
           trigger: {
@@ -228,26 +237,17 @@ export class HyperliquidTradingBot {
           },
         },
       } as OrderParameters["orders"][number]);
+      takeProfitOrders += 1;
     });
 
-    const stopPrice = this.resolveStopPrice(signal, entryPlans);
-    const stopFormatted = this.formatPrice(stopPrice);
-    orders.push({
-      a: asset.id,
-      b: exitSide,
-      p: stopFormatted,
-      s: this.formatSize(signal.size, asset.sizeDecimals),
-      r: true,
-      t: {
-        trigger: {
-          isMarket: true,
-          triggerPx: stopFormatted,
-          tpsl: "sl",
-        },
-      },
-    } as OrderParameters["orders"][number]);
+    const stopOrders = this.buildStopOrders(signal, asset, entryPlans);
+    stopOrders.forEach((order) => orders.push(order));
 
-    const grouping = signal.takeProfits.length > 0 ? "positionTpsl" : "na";
+    if (takeProfitOrders === 0) {
+      throw new Error("No take profit orders generated for signal");
+    }
+
+    const grouping = takeProfitOrders > 0 ? "positionTpsl" : "na";
     return {
       orders,
       grouping,
@@ -279,7 +279,12 @@ export class HyperliquidTradingBot {
       throw new Error("Entry reference price must be positive");
     }
 
-    const sizes = this.splitTakeProfitSizes(signal.size, levels, asset.sizeDecimals);
+    const sizeUnits = this.allocateLevelUnits(
+      signal.size,
+      Array.from({ length: levels }, () => ({})),
+      asset.sizeDecimals,
+    );
+    const factor = 10 ** asset.sizeDecimals;
     const stepConfig: DistanceConfig =
       signal.entryStrategy.type === "grid"
         ? signal.entryStrategy.spacing
@@ -290,10 +295,15 @@ export class HyperliquidTradingBot {
     const plans: EntryOrderPlan[] = [];
     for (let i = 0; i < levels; ++i) {
       const price = this.computeStrategyPrice(referencePrice, stepConfig, direction, i, accumulate);
+      const units = sizeUnits[i];
+      if (!(units > 0)) {
+        throw new Error("Entry strategy levels result in zero-sized order due to precision constraints");
+      }
+      const sizeValue = units / factor;
       plans.push({
         price,
         tif: "Gtc",
-        size: sizes[i],
+        size: this.formatSize(sizeValue, asset.sizeDecimals),
       });
     }
     return plans;
@@ -331,44 +341,215 @@ export class HyperliquidTradingBot {
     return price;
   }
 
-  private resolveStopPrice(signal: TradeSignal, entryPlans: EntryOrderPlan[]): number {
-    if (entryPlans.length === 0) {
-      throw new Error("Entry plans are required to resolve stop price");
-    }
+  private buildStopOrders(
+    signal: TradeSignal,
+    asset: AssetMeta,
+    entryPlans: EntryOrderPlan[],
+  ): OrderParameters["orders"] {
+    const baseLevels = signal.stopLosses.map((level) => ({
+      price: level.price,
+      sizeFraction: level.sizeFraction,
+      label: level.label,
+    }));
+    const trailingPrice = this.computeTrailingStopPrice(signal, entryPlans);
 
-    const trailing = signal.trailingStop;
-    const staticStop = signal.stopLoss;
-
-    if (!trailing) {
-      if (staticStop === undefined) {
-        throw new Error("Stop loss must be provided");
+    if (trailingPrice !== undefined) {
+      if (baseLevels.length === 0) {
+        baseLevels.push({ price: trailingPrice });
+      } else {
+        const index = this.getExtremeStopIndex(baseLevels, signal.side);
+        const current = baseLevels[index];
+        const adjustedPrice =
+          signal.side === "long"
+            ? Math.max(current.price, trailingPrice)
+            : Math.min(current.price, trailingPrice);
+        baseLevels[index] = {
+          ...current,
+          price: adjustedPrice,
+        };
       }
-      return staticStop;
     }
 
-    const reference = signal.side === "long"
-      ? Math.max(...entryPlans.map((plan) => plan.price))
-      : Math.min(...entryPlans.map((plan) => plan.price));
+    if (baseLevels.length === 0) {
+      throw new Error("Stop loss must be provided");
+    }
+
+    const units = this.allocateLevelUnits(signal.size, baseLevels, asset.sizeDecimals);
+    const exitSide = oppositeSide(signal.side);
+    const orders: OrderParameters["orders"] = [];
+    const factor = 10 ** asset.sizeDecimals;
+
+    for (let i = 0; i < baseLevels.length; ++i) {
+      const unitsForLevel = units[i];
+      if (!(unitsForLevel > 0)) {
+        throw new Error("Unable to allocate size for stop levels with current precision");
+      }
+      const sizeValue = unitsForLevel / factor;
+      const formattedSize = this.formatSize(sizeValue, asset.sizeDecimals);
+      const formattedPrice = this.formatPrice(baseLevels[i].price);
+      orders.push({
+        a: asset.id,
+        b: exitSide,
+        p: formattedPrice,
+        s: formattedSize,
+        r: true,
+        t: {
+          trigger: {
+            isMarket: true,
+            triggerPx: formattedPrice,
+            tpsl: "sl",
+          },
+        },
+      } as OrderParameters["orders"][number]);
+    }
+
+    return orders;
+  }
+
+  private computeTrailingStopPrice(
+    signal: TradeSignal,
+    entryPlans: EntryOrderPlan[],
+  ): number | undefined {
+    const trailing = signal.trailingStop;
+    if (!trailing) {
+      return undefined;
+    }
+
+    if (entryPlans.length === 0) {
+      throw new Error("Entry plans are required to resolve trailing stop price");
+    }
+
+    const reference =
+      signal.side === "long"
+        ? Math.max(...entryPlans.map((plan) => plan.price))
+        : Math.min(...entryPlans.map((plan) => plan.price));
 
     const offset = trailing.mode === "percent" ? reference * (trailing.value / 100) : trailing.value;
-    const trailingPrice = signal.side === "long" ? reference - offset : reference + offset;
+    const price = signal.side === "long" ? reference - offset : reference + offset;
 
-    if (!(trailingPrice > 0)) {
+    if (!(price > 0)) {
       throw new Error("Trailing stop offset results in non-positive price");
     }
 
-    if (signal.side === "long" && trailingPrice >= reference) {
+    if (signal.side === "long" && price >= reference) {
       throw new Error("Trailing stop must remain below entry price for long positions");
     }
-    if (signal.side === "short" && trailingPrice <= reference) {
+    if (signal.side === "short" && price <= reference) {
       throw new Error("Trailing stop must remain above entry price for short positions");
     }
 
-    if (staticStop === undefined) {
-      return trailingPrice;
+    return price;
+  }
+
+  private getExtremeStopIndex(
+    levels: ReadonlyArray<{ price: number }>,
+    side: TradeSignal["side"],
+  ): number {
+    if (levels.length === 0) {
+      throw new Error("Stop levels are required");
+    }
+    let index = 0;
+    for (let i = 1; i < levels.length; ++i) {
+      if (side === "long") {
+        if (levels[i].price > levels[index].price) {
+          index = i;
+        }
+      } else {
+        if (levels[i].price < levels[index].price) {
+          index = i;
+        }
+      }
+    }
+    return index;
+  }
+
+  private allocateLevelUnits(
+    total: number,
+    levels: ReadonlyArray<{ sizeFraction?: number }>,
+    decimals: number,
+  ): number[] {
+    if (!(total > 0)) {
+      throw new Error("Position size must be positive to allocate levels");
+    }
+    if (levels.length === 0) {
+      return [];
     }
 
-    return signal.side === "long" ? Math.max(staticStop, trailingPrice) : Math.min(staticStop, trailingPrice);
+    const factor = 10 ** decimals;
+    const totalUnits = Math.round(total * factor);
+    if (!(totalUnits > 0)) {
+      throw new Error("Position size is too small for the given precision");
+    }
+
+    const fractions = new Array(levels.length).fill(0);
+    let specifiedSum = 0;
+    let unspecifiedCount = 0;
+
+    for (let i = 0; i < levels.length; ++i) {
+      const fraction = levels[i].sizeFraction;
+      if (fraction === undefined) {
+        unspecifiedCount += 1;
+        continue;
+      }
+      if (!(fraction > 0)) {
+        throw new Error("Level fraction must be positive when provided");
+      }
+      fractions[i] = fraction;
+      specifiedSum += fraction;
+    }
+
+    if (specifiedSum > 1 + FRACTION_TOLERANCE) {
+      throw new Error("Allocated fractions exceed 100% of position size");
+    }
+
+    if (unspecifiedCount > 0) {
+      const remaining = 1 - specifiedSum;
+      if (remaining <= FRACTION_TOLERANCE) {
+        throw new Error("No remaining size available for unspecified levels");
+      }
+      const share = remaining / unspecifiedCount;
+      for (let i = 0; i < levels.length; ++i) {
+        if (levels[i].sizeFraction === undefined) {
+          fractions[i] = share;
+        }
+      }
+    } else {
+      if (specifiedSum <= FRACTION_TOLERANCE) {
+        const equal = 1 / levels.length;
+        fractions.fill(equal);
+      } else if (Math.abs(specifiedSum - 1) > FRACTION_TOLERANCE) {
+        const scale = 1 / specifiedSum;
+        for (let i = 0; i < fractions.length; ++i) {
+          fractions[i] *= scale;
+        }
+      }
+    }
+
+    const rawUnits = fractions.map((fraction) => fraction * totalUnits);
+    const units = rawUnits.map((value) => Math.floor(value));
+    let allocated = units.reduce((sum, value) => sum + value, 0);
+    let remainderUnits = totalUnits - allocated;
+
+    const remainderOrder = rawUnits
+      .map((value, index) => ({ index, remainder: value - units[index] }))
+      .sort((a, b) => b.remainder - a.remainder);
+
+    for (const item of remainderOrder) {
+      if (remainderUnits <= 0) {
+        break;
+      }
+      units[item.index] += 1;
+      remainderUnits -= 1;
+    }
+
+    if (remainderUnits > 0) {
+      for (let i = 0; i < units.length && remainderUnits > 0; ++i) {
+        units[i] += 1;
+        remainderUnits -= 1;
+      }
+    }
+
+    return units;
   }
 
   private formatSize(value: number, decimals: number): string {
@@ -386,26 +567,5 @@ export class HyperliquidTradingBot {
     }
     const str = value.toFixed(6);
     return str.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
-  }
-
-  private splitTakeProfitSizes(total: number, count: number, decimals: number): string[] {
-    if (count <= 0) {
-      return [];
-    }
-    const factor = 10 ** decimals;
-    const totalUnits = Math.round(total * factor);
-    const base = Math.floor(totalUnits / count);
-    let remainder = totalUnits - base * count;
-    const sizes: string[] = [];
-    for (let i = 0; i < count; ++i) {
-      let units = base;
-      if (remainder > 0) {
-        units += 1;
-        remainder -= 1;
-      }
-      const value = units / factor;
-      sizes.push(this.formatSize(value, decimals));
-    }
-    return sizes;
   }
 }
