@@ -1,0 +1,21 @@
+[
+  {
+    "id": "sig-1",
+    "symbol": "BTC",
+    "side": "buy",
+    "size": 2,
+    "strategy": "trend-follow",
+    "receivedAt": "2024-07-01T12:00:00.000Z",
+    "metadata": {
+      "confidence": 0.82
+    }
+  },
+  {
+    "id": "sig-2",
+    "symbol": "ETH",
+    "side": "sell",
+    "size": 1,
+    "strategy": "mean-revert",
+    "receivedAt": "2024-07-01T12:01:00.000Z"
+  }
+]
