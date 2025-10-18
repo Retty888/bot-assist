@@ -4,6 +4,7 @@ import {
   normalizeSymbol,
   parseTradeSignal,
   type DistanceConfig,
+  type TargetAllocation,
   type TradeSignal,
 } from "./tradeSignalParser.js";
 
@@ -346,7 +347,7 @@ export class HyperliquidTradingBot {
     asset: AssetMeta,
     entryPlans: EntryOrderPlan[],
   ): OrderParameters["orders"] {
-    const baseLevels = signal.stopLosses.map((level) => ({
+    const baseLevels = signal.stopLosses.map<TargetAllocation>((level) => ({
       price: level.price,
       sizeFraction: level.sizeFraction,
       label: level.label,

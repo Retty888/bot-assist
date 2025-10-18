@@ -11,6 +11,27 @@ const resetButton = document.getElementById("btn-reset");
 const sampleButton = document.getElementById("btn-sample");
 const autoSnippet = document.getElementById("auto-snippet");
 const autoError = document.getElementById("auto-error");
+const hintStatus = document.getElementById("hint-status");
+const hintSummary = document.getElementById("hint-summary");
+const hintContextElements = {
+  symbol: document.getElementById("hint-symbol"),
+  price: document.getElementById("hint-price"),
+  atr: document.getElementById("hint-atr"),
+  volatility: document.getElementById("hint-volatility"),
+  size: document.getElementById("hint-size"),
+  notional: document.getElementById("hint-notional"),
+  funding: document.getElementById("hint-funding"),
+};
+
+const hintSlotElements = Array.from(document.querySelectorAll("[data-hint-slot]"))
+  .filter((element) => element instanceof HTMLElement)
+  .reduce((acc, element) => {
+    const key = element.getAttribute("data-hint-slot");
+    if (key) {
+      acc[key] = element;
+    }
+    return acc;
+  }, {});
 
 const toggleButtons = {
   trailingStop: document.querySelector('[data-feature="trailingStop"]'),
@@ -45,6 +66,8 @@ function createDefaultFeatureState() {
 
 const featureState = createDefaultFeatureState();
 
+let hintManager = null;
+
 function syncFeatureUI(feature) {
   const state = featureState[feature];
   const button = toggleButtons[feature];
@@ -72,6 +95,14 @@ function applyStateToInputs() {
   trailEntryLevelsInput.value = featureState.trailEntry.levels;
   trailEntryStepValueInput.value = featureState.trailEntry.stepValue;
   trailEntryStepUnitSelect.value = featureState.trailEntry.unit;
+}
+
+function getFeatureSnapshot() {
+  return {
+    trailingStop: { ...featureState.trailingStop },
+    grid: { ...featureState.grid },
+    trailEntry: { ...featureState.trailEntry },
+  };
 }
 
 function formatNumeric(value) {
@@ -186,6 +217,52 @@ function appendFeatureSegments(baseText, segments) {
   return combined;
 }
 
+function applyHintAction(action) {
+  if (!action || !action.feature || !(action.feature in featureState)) {
+    return;
+  }
+
+  const target = featureState[action.feature];
+
+  if (Array.isArray(action.disable)) {
+    action.disable.forEach((feature) => {
+      if (feature in featureState) {
+        featureState[feature].enabled = false;
+      }
+    });
+  }
+
+  if (typeof action.enable === "boolean") {
+    target.enabled = action.enable;
+  }
+
+  if (action.params) {
+    Object.entries(action.params).forEach(([key, value]) => {
+      if (!(key in target)) {
+        return;
+      }
+      const current = target[key];
+      if (typeof current === "number") {
+        const numeric = Number.parseFloat(String(value));
+        if (Number.isFinite(numeric)) {
+          target[key] = numeric;
+        }
+        return;
+      }
+      if (typeof current === "boolean") {
+        target[key] = Boolean(value);
+        return;
+      }
+      target[key] = value;
+    });
+  }
+
+  applyStateToInputs();
+  updateAllFeatureUI();
+  updateSnippetPreview();
+  hintManager?.scheduleRefresh();
+}
+
 function parseFloatSafe(value) {
   const numeric = Number.parseFloat(value);
   return Number.isFinite(numeric) ? numeric : 0;
@@ -208,6 +285,7 @@ function resetFeatures() {
   applyStateToInputs();
   updateAllFeatureUI();
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 }
 
 async function fetchDefaultSignal() {
@@ -261,6 +339,229 @@ function setBusy(isBusy) {
   }
 }
 
+class HintManager {
+  constructor(options) {
+    this.textarea = options.textarea;
+    this.summary = options.summary;
+    this.status = options.status;
+    this.onApply = options.onApply;
+    this.context = options.context;
+    this.slots = { ...options.slots };
+    this.slots.global = this.summary;
+    this.uniqueSlots = Array.from(new Set(Object.values(this.slots)));
+    this.debounceHandle = null;
+    this.requestId = 0;
+    this.loading = false;
+  }
+
+  scheduleRefresh() {
+    if (this.debounceHandle) {
+      window.clearTimeout(this.debounceHandle);
+    }
+    const text = this.textarea.value.trim();
+    if (!text) {
+      this.reset();
+      this.setStatus("Paste a signal to pull insights.");
+      return;
+    }
+    this.debounceHandle = window.setTimeout(() => {
+      this.debounceHandle = null;
+      this.fetchHints();
+    }, 250);
+  }
+
+  setStatus(message) {
+    if (this.status) {
+      this.status.textContent = message;
+    }
+  }
+
+  setLoading(isLoading) {
+    this.loading = isLoading;
+    if (isLoading) {
+      this.summary.dataset.loading = "true";
+      this.summary.innerHTML = "";
+      this.setStatus("Fetching recommendations...");
+    } else {
+      delete this.summary.dataset.loading;
+    }
+  }
+
+  reset() {
+    this.uniqueSlots.forEach((element) => {
+      element.innerHTML = "";
+    });
+    this.updateContext({});
+    this.summary.innerHTML = "";
+  }
+
+  updateContext(context) {
+    const set = (key, value) => {
+      const element = this.context[key];
+      if (!element) {
+        return;
+      }
+      element.textContent = value ?? "—";
+    };
+
+    const priceValue = Number.isFinite(context.price)
+      ? `$${Number(context.price).toLocaleString(undefined, {
+          maximumFractionDigits: 2,
+        })}`
+      : "—";
+    const atrValue = Number.isFinite(context.atrPercent)
+      ? `${Number(context.atrPercent).toFixed(2)}%`
+      : "—";
+    const volValue = Number.isFinite(context.volatility)
+      ? `${Number(context.volatility).toFixed(1)}%`
+      : "—";
+    const sizeValue = Number.isFinite(context.positionSize)
+      ? Number(context.positionSize).toLocaleString(undefined, {
+          maximumFractionDigits: 4,
+        })
+      : "—";
+    const notionalValue = Number.isFinite(context.notionalUsd)
+      ? `$${Number(context.notionalUsd).toLocaleString(undefined, {
+          maximumFractionDigits: 0,
+        })}`
+      : "—";
+    const fundingValue = Number.isFinite(context.fundingRate)
+      ? `${Number(context.fundingRate * 100).toFixed(2)}%`
+      : "—";
+
+    set("symbol", context.symbol ?? "—");
+    set("price", priceValue);
+    set("atr", atrValue);
+    set("volatility", volValue);
+    set("size", sizeValue);
+    set("notional", notionalValue);
+    set("funding", fundingValue);
+  }
+
+  async fetchHints() {
+    const text = this.textarea.value.trim();
+    if (!text) {
+      return;
+    }
+
+    const payload = {
+      text,
+      features: getFeatureSnapshot(),
+    };
+
+    const currentId = ++this.requestId;
+    this.setLoading(true);
+
+    try {
+      const response = await fetch("/api/hints", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+      if (currentId !== this.requestId) {
+        return;
+      }
+      if (!response.ok) {
+        const message = typeof data.error === "string" ? data.error : "Failed to load hints.";
+        this.showError(message);
+        return;
+      }
+
+      this.render(data);
+      const hintCount = Array.isArray(data.hints) ? data.hints.length : 0;
+      this.setStatus(hintCount > 0 ? "Recommendations updated." : "No actionable hints yet.");
+    } catch (error) {
+      if (currentId !== this.requestId) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "Unknown error";
+      this.showError(message);
+    } finally {
+      if (currentId === this.requestId) {
+        this.setLoading(false);
+      }
+    }
+  }
+
+  render(payload) {
+    this.uniqueSlots.forEach((element) => {
+      element.innerHTML = "";
+    });
+    this.summary.innerHTML = "";
+
+    const hints = Array.isArray(payload.hints) ? payload.hints : [];
+    this.updateContext(payload.context ?? {});
+
+    hints.forEach((hint) => {
+      const slot = this.slots[hint.slot] ?? this.summary;
+      const chip = this.createChip(hint);
+      slot.appendChild(chip);
+    });
+  }
+
+  showError(message) {
+    this.uniqueSlots.forEach((element) => {
+      element.innerHTML = "";
+    });
+    this.summary.innerHTML = "";
+    this.updateContext({});
+    const chip = this.createChip({
+      badge: "Error",
+      title: "Hints unavailable",
+      message,
+      severity: "warning",
+      slot: "global",
+    });
+    this.summary.appendChild(chip);
+    this.setStatus("Hints temporarily unavailable.");
+  }
+
+  createChip(hint) {
+    const chip = document.createElement("div");
+    chip.className = `hint-chip ${hint.severity ?? "info"}`;
+
+    const badge = document.createElement("span");
+    badge.className = "hint-badge";
+    badge.textContent = hint.badge ?? "Hint";
+    if (hint.tooltip) {
+      badge.setAttribute("data-tooltip", hint.tooltip);
+    }
+    chip.appendChild(badge);
+
+    const content = document.createElement("div");
+    content.className = "hint-content";
+
+    const title = document.createElement("p");
+    title.className = "hint-title";
+    title.textContent = hint.title ?? "Suggestion";
+    content.appendChild(title);
+
+    const text = document.createElement("p");
+    text.className = "hint-text";
+    text.textContent = hint.message ?? "";
+    content.appendChild(text);
+
+    chip.appendChild(content);
+
+    if (hint.action && typeof this.onApply === "function") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "hint-apply";
+      button.textContent = hint.action.label ?? "Apply";
+      button.addEventListener("click", () => {
+        this.onApply(hint.action);
+      });
+      chip.appendChild(button);
+    }
+
+    return chip;
+  }
+}
+
 Object.entries(toggleButtons).forEach(([feature, button]) => {
   if (!button) {
     return;
@@ -291,47 +592,60 @@ Object.entries(toggleButtons).forEach(([feature, button]) => {
     }
 
     updateSnippetPreview();
+    hintManager?.scheduleRefresh();
   });
 });
 
 trailingStopValueInput.addEventListener("input", () => {
   featureState.trailingStop.value = parseFloatSafe(trailingStopValueInput.value);
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 });
 
 trailingStopUnitSelect.addEventListener("change", () => {
   featureState.trailingStop.unit = trailingStopUnitSelect.value;
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 });
 
 gridLevelsInput.addEventListener("input", () => {
   featureState.grid.levels = parseIntSafe(gridLevelsInput.value);
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 });
 
 gridSpacingValueInput.addEventListener("input", () => {
   featureState.grid.spacingValue = parseFloatSafe(gridSpacingValueInput.value);
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 });
 
 gridSpacingUnitSelect.addEventListener("change", () => {
   featureState.grid.unit = gridSpacingUnitSelect.value;
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 });
 
 trailEntryLevelsInput.addEventListener("input", () => {
   featureState.trailEntry.levels = parseIntSafe(trailEntryLevelsInput.value);
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 });
 
 trailEntryStepValueInput.addEventListener("input", () => {
   featureState.trailEntry.stepValue = parseFloatSafe(trailEntryStepValueInput.value);
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
 });
 
 trailEntryStepUnitSelect.addEventListener("change", () => {
   featureState.trailEntry.unit = trailEntryStepUnitSelect.value;
   updateSnippetPreview();
+  hintManager?.scheduleRefresh();
+});
+
+textarea.addEventListener("input", () => {
+  hintManager?.scheduleRefresh();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -396,6 +710,7 @@ resetButton.addEventListener("click", () => {
   parsedBlock.textContent = "(waiting)";
   orderBlock.textContent = "(waiting)";
   exchangeBlock.textContent = "(waiting)";
+  hintManager?.scheduleRefresh();
 });
 
 sampleButton.addEventListener("click", () => {
@@ -413,6 +728,16 @@ sampleButton.addEventListener("click", () => {
   updateAllFeatureUI();
   updateSnippetPreview();
   textarea.focus();
+  hintManager?.scheduleRefresh();
+});
+
+hintManager = new HintManager({
+  textarea,
+  summary: hintSummary,
+  status: hintStatus,
+  slots: hintSlotElements,
+  context: hintContextElements,
+  onApply: applyHintAction,
 });
 
 resetFeatures();

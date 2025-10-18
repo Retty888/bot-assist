@@ -5,6 +5,7 @@ import express, { type Request, type Response } from "express";
 
 import { parseTradeSignal } from "./trading/tradeSignalParser.js";
 import { DEFAULT_SIGNAL, instantiateTradingBot } from "./runtime/botRuntime.js";
+import { buildRecommendations } from "./insights/recommendationService.js";
 
 const app = express();
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
@@ -23,6 +24,22 @@ app.get("/", (_req: Request, res: Response) => {
 
 app.get("/api/default-signal", (_req: Request, res: Response) => {
   res.json({ defaultSignal: DEFAULT_SIGNAL });
+});
+
+app.post("/api/hints", (req: Request, res: Response) => {
+  const text = typeof req.body?.text === "string" ? req.body.text : "";
+  if (!text.trim()) {
+    res.status(400).json({ error: "Signal text is required" });
+    return;
+  }
+
+  try {
+    const hints = buildRecommendations({ text, market: req.body?.market });
+    res.json(hints);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({ error: message });
+  }
 });
 
 app.post("/api/execute", async (req: Request, res: Response) => {
@@ -50,6 +67,10 @@ app.post("/api/execute", async (req: Request, res: Response) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`[bot] UI available at http://localhost:${port}`);
-});
+if (!process.env.VITEST_WORKER_ID) {
+  app.listen(port, () => {
+    console.log(`[bot] UI available at http://localhost:${port}`);
+  });
+}
+
+export { app };
