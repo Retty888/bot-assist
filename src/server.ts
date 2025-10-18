@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
 
 import { parseTradeSignal } from "./trading/tradeSignalParser.js";
-import { DEFAULT_SIGNAL, instantiateTradingBot } from "./runtime/botRuntime.js";
+import {
+  DEFAULT_SIGNAL,
+  getMarketDataSnapshot,
+  instantiateTradingBot,
+} from "./runtime/botRuntime.js";
 import { buildRecommendations } from "./insights/recommendationService.js";
 
 const app = express();
@@ -24,6 +28,65 @@ app.get("/", (_req: Request, res: Response) => {
 
 app.get("/api/default-signal", (_req: Request, res: Response) => {
   res.json({ defaultSignal: DEFAULT_SIGNAL });
+});
+
+function buildPriceLayers(text: string | undefined) {
+  if (!text?.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = parseTradeSignal(text);
+    const entries: number[] = [];
+    if (parsed.entryPrice && parsed.entryPrice > 0) {
+      entries.push(parsed.entryPrice);
+    }
+    const takeProfits = parsed.takeProfits
+      .map((level) => level.price)
+      .filter((price): price is number => Number.isFinite(price) && price > 0);
+    const stopLosses = parsed.stopLosses
+      .map((level) => level.price)
+      .filter((price): price is number => Number.isFinite(price) && price > 0);
+
+    if (parsed.stopLoss && parsed.stopLoss > 0 && stopLosses.length === 0) {
+      stopLosses.push(parsed.stopLoss);
+    }
+
+    return {
+      entries,
+      takeProfits,
+      stopLosses,
+      rawSymbol: parsed.symbol,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+app.post("/api/market-data", async (req: Request, res: Response) => {
+  try {
+    const body = req.body ?? {};
+    const signalText = typeof body.signal === "string" ? body.signal : undefined;
+    const symbolOverride = typeof body.symbol === "string" ? body.symbol : undefined;
+
+    const layers = buildPriceLayers(signalText);
+    const targetSymbol = symbolOverride ?? layers?.rawSymbol ?? "BTC";
+    const snapshot = await getMarketDataSnapshot(targetSymbol);
+
+    res.json({
+      ...snapshot,
+      layers: layers
+        ? {
+            entries: layers.entries,
+            takeProfits: layers.takeProfits,
+            stopLosses: layers.stopLosses,
+          }
+        : undefined,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load market data";
+    res.status(400).json({ error: message });
+  }
 });
 
 app.post("/api/hints", (req: Request, res: Response) => {

@@ -5,10 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Hyperliquid Signal Bot</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script
+      defer
+      src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"
+    ></script>
   </head>
-  <body>
+  <body data-theme="dark">
     <main>
       <header class="hero">
+        <div class="hero-actions">
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">
+            <span class="theme-toggle__icon" aria-hidden="true">☀️</span>
+            <span class="theme-toggle__label">Light</span>
+          </button>
+        </div>
         <div>
           <p class="eyebrow">Manual Signal Executor</p>
           <h1>Hyperliquid Signal Bot</h1>
@@ -33,6 +43,66 @@
           </ul>
         </aside>
       </header>
+
+      <section class="card market" id="market-dashboard">
+        <header class="market-header">
+          <div>
+            <h2>Market dashboard</h2>
+            <p>Track mid price, spreads, and contextual volatility before executing.</p>
+          </div>
+          <div class="market-badges">
+            <span id="market-mode-badge" class="badge badge--demo">Demo data</span>
+            <span id="market-updated" class="badge badge--muted">—</span>
+          </div>
+        </header>
+
+        <dl class="market-stats">
+          <div>
+            <dt>Symbol</dt>
+            <dd id="market-symbol">—</dd>
+          </div>
+          <div>
+            <dt>Mid price</dt>
+            <dd id="market-mid">—</dd>
+          </div>
+          <div>
+            <dt>Spread</dt>
+            <dd id="market-spread">—</dd>
+          </div>
+          <div>
+            <dt>Volatility</dt>
+            <dd id="market-volatility">—</dd>
+          </div>
+          <div>
+            <dt>Funding</dt>
+            <dd id="market-funding">—</dd>
+          </div>
+          <div>
+            <dt>24h volume</dt>
+            <dd id="market-volume">—</dd>
+          </div>
+        </dl>
+
+        <div class="chart-grid">
+          <div class="chart-panel">
+            <header class="chart-panel__header">
+              <h3>Price action</h3>
+              <p>Live candlesticks with execution layers.</p>
+            </header>
+            <div id="price-chart" class="chart-canvas" role="img" aria-label="Candlestick chart"></div>
+            <ul id="layer-summary" class="layer-summary" aria-live="polite"></ul>
+          </div>
+
+          <div class="chart-panel heatmap-panel">
+            <header class="chart-panel__header">
+              <h3>Volume heatmap</h3>
+              <p>Relative liquidity bands around the current mid price.</p>
+            </header>
+            <div id="volume-heatmap" class="heatmap-grid" role="list"></div>
+            <p id="volatility-hint" class="volatility-hint">—</p>
+          </div>
+        </div>
+      </section>
 
       <section class="card">
         <form id="signal-form" autocomplete="off">
