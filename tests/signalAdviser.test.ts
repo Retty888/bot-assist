@@ -59,13 +59,33 @@ describe("signal adviser", () => {
         fc.double({ min: 1, max: 10 }),
         fc.double({ min: 5, max: 30 }),
         (minRaw, maxRaw) => {
-          const min = Math.min(minRaw, maxRaw);
-          const max = Math.max(minRaw, maxRaw);
-          const advice = adviseSignal(mediumSignal, { minLeverage: min, maxLeverage: max });
+          const normalizedMin = Number.isFinite(minRaw) && minRaw > 0 ? minRaw : 1;
+          const normalizedMax = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 25;
+          const min = Math.min(normalizedMin, normalizedMax);
+          const max = Math.max(normalizedMin, normalizedMax);
+          const advice = adviseSignal(mediumSignal, { minLeverage: minRaw, maxLeverage: maxRaw });
+          expect(Number.isFinite(advice.recommendedLeverage)).toBe(true);
           expect(advice.recommendedLeverage + 0.02).toBeGreaterThanOrEqual(min);
           expect(advice.recommendedLeverage - 0.02).toBeLessThanOrEqual(max);
         },
       ),
     );
+  });
+
+  it("falls back to sane leverage bounds when provided with invalid ones", () => {
+    const signal: TradeSignal = {
+      ...baseSignal,
+      leverage: 8,
+      riskLabel: "low",
+    };
+
+    const advice = adviseSignal(signal, {
+      minLeverage: Number.NaN,
+      maxLeverage: Number.POSITIVE_INFINITY,
+    });
+
+    expect(advice.recommendedLeverage).toBeGreaterThanOrEqual(1);
+    expect(advice.recommendedLeverage).toBeLessThanOrEqual(25);
+    expect(Number.isFinite(advice.recommendedLeverage)).toBe(true);
   });
 });

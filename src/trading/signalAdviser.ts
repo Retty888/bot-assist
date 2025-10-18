@@ -65,8 +65,8 @@ export function adviseSignal(signal: TradeSignal, options: SignalAdviceOptions =
     notes.push(`Volatility bias ${volatilityBias.toFixed(2)} applied to leverage`);
   }
 
-  const providedMin = options.minLeverage ?? 1;
-  const providedMax = options.maxLeverage ?? 25;
+  const providedMin = sanitizeLeverageBound(options.minLeverage, 1);
+  const providedMax = sanitizeLeverageBound(options.maxLeverage, 25);
   const minLeverage = Math.min(providedMin, providedMax);
   const maxLeverage = Math.max(providedMin, providedMax);
   let recommendedLeverage = clamp(leverage, minLeverage, maxLeverage);
@@ -229,6 +229,9 @@ function timeframeHintToMinutes(hint: string): number | undefined {
 }
 
 function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
   if (value < min) {
     return min;
   }
@@ -236,4 +239,11 @@ function clamp(value: number, min: number, max: number): number {
     return max;
   }
   return value;
+}
+
+function sanitizeLeverageBound(bound: number | undefined, fallback: number): number {
+  if (Number.isFinite(bound) && (bound as number) > 0) {
+    return bound as number;
+  }
+  return fallback;
 }
