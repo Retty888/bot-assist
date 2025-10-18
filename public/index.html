@@ -38,6 +38,7 @@
         <form id="signal-form" autocomplete="off">
           <label class="field-label" for="signal">Signal text</label>
           <textarea id="signal" name="signal" placeholder="Enter signal..." spellcheck="false"></textarea>
+          <div class="hint-slot" data-hint-slot="signal" aria-live="polite"></div>
 
           <div class="actions">
             <button type="submit" class="primary">Execute Signal</button>
@@ -77,6 +78,7 @@
               </select>
             </div>
           </div>
+          <div class="hint-slot" data-hint-slot="trailingStop" aria-live="polite"></div>
         </div>
 
         <div id="settings-grid" class="feature-settings hidden">
@@ -101,6 +103,7 @@
               </select>
             </div>
           </div>
+          <div class="hint-slot" data-hint-slot="grid" aria-live="polite"></div>
         </div>
 
         <div id="settings-trailEntry" class="feature-settings hidden">
@@ -125,6 +128,7 @@
               </select>
             </div>
           </div>
+          <div class="hint-slot" data-hint-slot="trailEntry" aria-live="polite"></div>
         </div>
 
         <div class="snippet-preview">
@@ -132,6 +136,45 @@
           <code id="auto-snippet">(none)</code>
         </div>
         <p id="auto-error" class="snippet-error"></p>
+      </section>
+
+      <section class="card hints" id="hints-card">
+        <header class="hints-header">
+          <h2>Strategy recommendations</h2>
+          <span class="hint-badge mild" data-tooltip="Contextual tips update as you tweak the signal.">beta</span>
+        </header>
+        <div class="hint-context-grid" id="hint-context">
+          <div>
+            <span class="hint-label">Symbol</span>
+            <span class="hint-value" id="hint-symbol">—</span>
+          </div>
+          <div>
+            <span class="hint-label">Price</span>
+            <span class="hint-value" id="hint-price">—</span>
+          </div>
+          <div>
+            <span class="hint-label">ATR%</span>
+            <span class="hint-value" id="hint-atr">—</span>
+          </div>
+          <div>
+            <span class="hint-label">Volatility</span>
+            <span class="hint-value" id="hint-volatility">—</span>
+          </div>
+          <div>
+            <span class="hint-label">Size</span>
+            <span class="hint-value" id="hint-size">—</span>
+          </div>
+          <div>
+            <span class="hint-label">Notional</span>
+            <span class="hint-value" id="hint-notional">—</span>
+          </div>
+          <div>
+            <span class="hint-label">Funding</span>
+            <span class="hint-value" id="hint-funding">—</span>
+          </div>
+        </div>
+        <p id="hint-status" class="hint-status">Paste a signal to pull insights.</p>
+        <div id="hint-summary" class="hint-summary" aria-live="polite"></div>
       </section>
 
       <section class="card output" id="status-card">
