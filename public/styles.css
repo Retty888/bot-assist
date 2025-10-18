@@ -1,0 +1,414 @@
+:root {
+  color-scheme: dark;
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: #060910;
+  color: #f1f5f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: clamp(1.5rem, 3vw, 3rem);
+}
+
+main {
+  width: min(1100px, 100%);
+  display: grid;
+  gap: clamp(1.5rem, 2vw, 2.5rem);
+}
+
+.hero {
+  display: grid;
+  gap: 1.5rem;
+  padding: clamp(1.75rem, 3vw, 2.5rem);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.18), rgba(15, 118, 110, 0.18));
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 20px;
+  backdrop-filter: blur(18px);
+}
+
+.hero h1 {
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  margin: 0;
+}
+
+.hero .lede {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.85);
+  line-height: 1.6;
+  max-width: 60ch;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  font-size: 0.75rem;
+  color: rgba(148, 163, 184, 0.75);
+  margin: 0 0 0.5rem;
+}
+
+.runtime-hints {
+  padding: 1.25rem;
+  background: rgba(8, 13, 24, 0.72);
+  border-radius: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.45);
+}
+
+.runtime-hints h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(94, 234, 212, 0.85);
+}
+
+.runtime-hints h3 {
+  margin: 1.25rem 0 0.75rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+.runtime-hints ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+}
+
+.runtime-hints code {
+  color: rgba(56, 189, 248, 0.9);
+}
+
+.runtime-hints .syntax {
+  font-family: inherit;
+  color: rgba(203, 213, 225, 0.82);
+}
+
+.runtime-hints .syntax li code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: rgba(56, 189, 248, 0.92);
+}
+
+.card {
+  background: rgba(10, 16, 28, 0.72);
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  padding: clamp(1.5rem, 3vw, 2.25rem);
+  box-shadow: 0 28px 60px rgba(8, 11, 20, 0.45);
+  backdrop-filter: blur(18px);
+}
+
+.advanced {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.advanced-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.advanced-header p {
+  margin: 0;
+  color: rgba(203, 213, 225, 0.75);
+  font-size: 0.95rem;
+}
+
+.toggle-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+button.toggle {
+  background: rgba(15, 23, 42, 0.68);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: rgba(226, 232, 240, 0.85);
+  box-shadow: none;
+}
+
+button.toggle:hover,
+button.toggle:focus-visible {
+  border-color: rgba(148, 163, 184, 0.6);
+  color: rgba(226, 232, 240, 0.95);
+}
+
+button.toggle.active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.75), rgba(56, 189, 248, 0.75));
+  color: #f8fafc;
+  border-color: transparent;
+  box-shadow: 0 12px 25px rgba(37, 99, 235, 0.35);
+}
+
+.feature-settings {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  background: rgba(6, 11, 22, 0.8);
+}
+
+.feature-settings.hidden {
+  display: none;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.settings-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.settings-header p {
+  margin: 0.25rem 0 0;
+  color: rgba(148, 163, 184, 0.8);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.field-row {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.input-group {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.input-group input,
+.field-row > input,
+.input-group select {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  background: rgba(2, 6, 14, 0.85);
+  color: inherit;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.95rem;
+}
+
+.input-group select {
+  max-width: 140px;
+  cursor: pointer;
+}
+
+.input-group input:focus,
+.field-row > input:focus,
+.input-group select:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.snippet-preview {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: rgba(8, 13, 24, 0.85);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: rgba(191, 219, 254, 0.9);
+  font-size: 0.9rem;
+}
+
+.snippet-preview code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+  color: rgba(125, 211, 252, 0.95);
+}
+
+.snippet-preview code.error {
+  color: #fca5a5;
+}
+
+.snippet-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.85rem;
+  min-height: 1em;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 0.95rem;
+  color: rgba(203, 213, 225, 0.85);
+}
+
+textarea {
+  width: 100%;
+  min-height: 150px;
+  border-radius: 16px;
+  padding: 1.25rem;
+  background: rgba(3, 7, 18, 0.92);
+  border: 1px solid rgba(71, 85, 105, 0.6);
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+}
+
+.actions {
+  margin-top: 1.25rem;
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+button {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: 0.85rem 1.9rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  font-size: 0.95rem;
+  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+}
+
+button.primary {
+  background: linear-gradient(135deg, #2563eb, #38bdf8);
+  color: #f8fafc;
+  box-shadow: 0 20px 35px rgba(37, 99, 235, 0.35);
+}
+
+button.primary:hover,
+button.primary:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px rgba(37, 99, 235, 0.4);
+}
+
+button.ghost {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: rgba(226, 232, 240, 0.85);
+}
+
+button.ghost:hover,
+button.ghost:focus-visible {
+  border-color: rgba(148, 163, 184, 0.6);
+  color: rgba(226, 232, 240, 0.95);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+  box-shadow: none;
+  transform: none;
+}
+
+.output {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.status-message {
+  padding: 1.1rem 1.25rem;
+  border-radius: 14px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.1);
+  color: rgba(191, 219, 254, 0.95);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.status-message.error {
+  border-color: rgba(248, 113, 113, 0.75);
+  background: rgba(248, 113, 113, 0.15);
+  color: #fecaca;
+}
+
+.status-message.success {
+  border-color: rgba(16, 185, 129, 0.7);
+  background: rgba(16, 185, 129, 0.14);
+  color: #bbf7d0;
+}
+
+.details {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 14px;
+  background: rgba(8, 13, 24, 0.88);
+  padding: 0.75rem 1rem;
+}
+
+.details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.details pre {
+  margin: 0.75rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+  color: rgba(203, 213, 225, 0.85);
+}
+
+.footer {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0 0.5rem 0.5rem;
+  color: rgba(148, 163, 184, 0.8);
+  font-size: 0.9rem;
+}
+
+.footer code {
+  color: rgba(248, 250, 252, 0.9);
+}
+
+.footer small {
+  margin-left: 0.75rem;
+  color: rgba(148, 163, 184, 0.65);
+}
+
+@media (max-width: 768px) {
+  .hero {
+    padding: 1.5rem;
+  }
+
+  .runtime-hints {
+    order: 2;
+  }
+
+  .status-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

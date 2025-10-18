@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseTradeSignal, TradeSignalParseError } from "../src/trading/tradeSignalParser";
+import { parseTradeSignal, TradeSignalParseError } from "../src/trading/tradeSignalParser.js";
 
 describe("parseTradeSignal", () => {
   it("parses a well structured signal", () => {
@@ -15,6 +15,7 @@ describe("parseTradeSignal", () => {
     expect(signal.stopLoss).toBeCloseTo(61500);
     expect(signal.takeProfits).toEqual([64000, 65000]);
     expect(signal.execution).toBe("limit");
+    expect(signal.entryStrategy.type).toBe("single");
   });
 
   it("detects market order when entry is missing", () => {
@@ -64,5 +65,47 @@ Titan Vault (https://www.trysuper.co/trader/0x4b0eab9444a75a03f1ef340c8beac737af
     expect(() => parseTradeSignal("Long BTC 1 take profit 66000")).toThrow(
       TradeSignalParseError,
     );
+  });
+
+  it("parses trailing stop expressed in percent", () => {
+    const signal = parseTradeSignal(
+      "Long BTC 2 entry 60000 tp1 62000 tp2 63000 trailing stop 0.75%",
+    );
+
+    expect(signal.trailingStop).toEqual({
+      mode: "percent",
+      value: 0.75,
+    });
+    expect(signal.stopLoss).toBeUndefined();
+  });
+
+  it("parses grid entry strategy with absolute spacing", () => {
+    const signal = parseTradeSignal(
+      "Long BTC 3 entry 60000 stop 58500 tp 62500 grid 3 150",
+    );
+
+    expect(signal.entryStrategy).toEqual({
+      type: "grid",
+      levels: 3,
+      spacing: {
+        mode: "absolute",
+        value: 150,
+      },
+    });
+  });
+
+  it("parses trailing entry strategy with percent spacing", () => {
+    const signal = parseTradeSignal(
+      "Short ETH size 5 entry 3200 stop 3350 tp 3000 trail entry 4 0.5%",
+    );
+
+    expect(signal.entryStrategy).toEqual({
+      type: "trailing",
+      levels: 4,
+      step: {
+        mode: "percent",
+        value: 0.5,
+      },
+    });
   });
 });

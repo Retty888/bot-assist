@@ -1,12 +1,11 @@
-import {
-  ExchangeClient,
-  HttpTransport,
-  InfoClient,
-  type OrderParameters,
-  type OrderResponseSuccess,
-} from "@nktkas/hyperliquid";
+import { ExchangeClient, HttpTransport, InfoClient, type OrderParameters } from "@nktkas/hyperliquid";
 
-import { normalizeSymbol, parseTradeSignal, type TradeSignal } from "./tradeSignalParser";
+import {
+  normalizeSymbol,
+  parseTradeSignal,
+  type DistanceConfig,
+  type TradeSignal,
+} from "./tradeSignalParser.js";
 
 type MetaAndAssetCtxsTuple = Awaited<ReturnType<InfoClient["metaAndAssetCtxs"]>>;
 type AssetContexts = MetaAndAssetCtxsTuple[1];
@@ -21,10 +20,12 @@ export interface HyperliquidBotOptions {
   readonly transport?: HttpTransport;
 }
 
+type ExchangeOrderResponse = Awaited<ReturnType<ExchangeClient["order"]>>;
+
 export interface ExecutionResult {
   readonly signal: TradeSignal;
   readonly payload: OrderParameters;
-  readonly response: OrderResponseSuccess;
+  readonly response: ExchangeOrderResponse;
 }
 
 interface AssetMeta {
@@ -37,6 +38,18 @@ interface CachedAssets {
   readonly timestamp: number;
   readonly assetsBySymbol: Map<string, AssetMeta>;
   readonly contexts: AssetContexts;
+}
+
+interface EntryContext {
+  readonly basePrice: number;
+  readonly tif: "Gtc" | "Ioc";
+  readonly midPrice: number;
+}
+
+interface EntryOrderPlan {
+  readonly price: number;
+  readonly tif: "Gtc" | "Ioc";
+  readonly size: string;
 }
 
 const DEFAULT_SLIPPAGE_BPS = 50; // 0.5%
@@ -95,8 +108,8 @@ export class HyperliquidTradingBot {
   async executeSignal(signal: TradeSignal): Promise<ExecutionResult> {
     const cache = await this.ensureCache();
     const asset = this.resolveAsset(cache, signal.symbol);
-    const { price, tif } = await this.resolveEntryPrice(signal, asset, cache);
-    const payload = this.buildOrderPayload(signal, asset, price, tif);
+    const entryContext = this.resolveEntryContext(signal, asset, cache);
+    const payload = this.buildOrderPayload(signal, asset, entryContext);
     const response = await this.exchange.order(payload);
     return { signal, payload, response };
   }
@@ -137,15 +150,7 @@ export class HyperliquidTradingBot {
     return asset;
   }
 
-  private async resolveEntryPrice(
-    signal: TradeSignal,
-    asset: AssetMeta,
-    cache: CachedAssets,
-  ): Promise<{ price: number; tif: "Gtc" | "Ioc" }> {
-    if (signal.execution === "limit" && signal.entryPrice !== undefined) {
-      return { price: signal.entryPrice, tif: "Gtc" };
-    }
-
+  private resolveEntryContext(signal: TradeSignal, asset: AssetMeta, cache: CachedAssets): EntryContext {
     const context = cache.contexts[asset.id];
     if (!context || context.midPx === null) {
       throw new Error("Unable to fetch mid price from Hyperliquid");
@@ -156,68 +161,87 @@ export class HyperliquidTradingBot {
       throw new Error("Received invalid mid price from Hyperliquid");
     }
 
+    if (signal.execution === "limit" && signal.entryPrice !== undefined) {
+      return {
+        basePrice: signal.entryPrice,
+        tif: "Gtc",
+        midPrice: mid,
+      } satisfies EntryContext;
+    }
+
     const slippage = this.slippageBps / 10_000;
     const factor = signal.side === "long" ? 1 + slippage : 1 - slippage;
     const price = mid * factor;
-    return { price, tif: "Ioc" };
+    const tif: "Gtc" | "Ioc" = signal.execution === "market" ? "Ioc" : "Gtc";
+
+    return {
+      basePrice: price,
+      tif,
+      midPrice: mid,
+    } satisfies EntryContext;
   }
 
   private buildOrderPayload(
     signal: TradeSignal,
     asset: AssetMeta,
-    entryPrice: number,
-    tif: "Gtc" | "Ioc",
+    entryContext: EntryContext,
   ): OrderParameters {
-    const orders: OrderParameters["orders"] = [];
+    const entryPlans = this.buildEntryPlans(signal, asset, entryContext);
+    if (entryPlans.length === 0) {
+      throw new Error("No entry orders generated for signal");
+    }
 
-    const sizeFormatted = this.formatSize(signal.size, asset.sizeDecimals);
-    const entry = {
-      a: asset.id,
-      b: entrySide(signal.side),
-      p: this.formatPrice(entryPrice),
-      s: sizeFormatted,
-      r: false,
-      t: {
-        limit: {
-          tif,
+    const orders: OrderParameters["orders"] = [];
+    const entryFlag = entrySide(signal.side);
+
+    entryPlans.forEach((plan) => {
+      const price = this.formatPrice(plan.price);
+      orders.push({
+        a: asset.id,
+        b: entryFlag,
+        p: price,
+        s: plan.size,
+        r: false,
+        t: {
+          limit: {
+            tif: plan.tif,
+          },
         },
-      },
-    } as const;
-    orders.push(entry as OrderParameters["orders"][number]);
+      } as OrderParameters["orders"][number]);
+    });
 
     const exitSide = oppositeSide(signal.side);
     const tpSizes = this.splitTakeProfitSizes(signal.size, signal.takeProfits.length, asset.sizeDecimals);
     signal.takeProfits.forEach((target, index) => {
+      const formattedTarget = this.formatPrice(target);
       orders.push({
         a: asset.id,
         b: exitSide,
-        p: this.formatPrice(target),
+        p: formattedTarget,
         s: tpSizes[index],
         r: true,
         t: {
           trigger: {
             isMarket: true,
-            triggerPx: this.formatPrice(target),
+            triggerPx: formattedTarget,
             tpsl: "tp",
           },
         },
       } as OrderParameters["orders"][number]);
     });
 
-    if (signal.stopLoss === undefined) {
-      throw new Error("Stop loss must be provided");
-    }
-
+    const stopPrice = this.resolveStopPrice(signal, entryPlans);
+    const stopFormatted = this.formatPrice(stopPrice);
     orders.push({
       a: asset.id,
       b: exitSide,
-      p: this.formatPrice(signal.stopLoss),
-      s: sizeFormatted,
+      p: stopFormatted,
+      s: this.formatSize(signal.size, asset.sizeDecimals),
       r: true,
       t: {
         trigger: {
           isMarket: true,
-          triggerPx: this.formatPrice(signal.stopLoss),
+          triggerPx: stopFormatted,
           tpsl: "sl",
         },
       },
@@ -228,6 +252,123 @@ export class HyperliquidTradingBot {
       orders,
       grouping,
     };
+  }
+
+  private buildEntryPlans(
+    signal: TradeSignal,
+    asset: AssetMeta,
+    entryContext: EntryContext,
+  ): EntryOrderPlan[] {
+    if (signal.entryStrategy.type === "single") {
+      return [
+        {
+          price: entryContext.basePrice,
+          tif: entryContext.tif,
+          size: this.formatSize(signal.size, asset.sizeDecimals),
+        },
+      ];
+    }
+
+    const levels = signal.entryStrategy.levels;
+    if (!(levels > 0)) {
+      throw new Error("Entry strategy levels must be positive");
+    }
+
+    const referencePrice = signal.entryPrice ?? entryContext.basePrice;
+    if (!(referencePrice > 0)) {
+      throw new Error("Entry reference price must be positive");
+    }
+
+    const sizes = this.splitTakeProfitSizes(signal.size, levels, asset.sizeDecimals);
+    const stepConfig: DistanceConfig =
+      signal.entryStrategy.type === "grid"
+        ? signal.entryStrategy.spacing
+        : signal.entryStrategy.step;
+    const accumulate = signal.entryStrategy.type === "trailing";
+    const direction = signal.side === "long" ? -1 : 1;
+
+    const plans: EntryOrderPlan[] = [];
+    for (let i = 0; i < levels; ++i) {
+      const price = this.computeStrategyPrice(referencePrice, stepConfig, direction, i, accumulate);
+      plans.push({
+        price,
+        tif: "Gtc",
+        size: sizes[i],
+      });
+    }
+    return plans;
+  }
+
+  private computeStrategyPrice(
+    referencePrice: number,
+    spacing: DistanceConfig,
+    direction: number,
+    levelIndex: number,
+    accumulate: boolean,
+  ): number {
+    if (levelIndex === 0) {
+      return referencePrice;
+    }
+
+    if (spacing.mode === "percent") {
+      const percent = spacing.value / 100;
+      const factor = accumulate
+        ? Math.pow(1 + direction * percent, levelIndex)
+        : 1 + direction * percent * levelIndex;
+      const price = referencePrice * factor;
+      if (!(price > 0)) {
+        throw new Error("Computed entry price is not positive");
+      }
+      return price;
+    }
+
+    const baseStep = spacing.value;
+    const multiplier = accumulate ? (levelIndex * (levelIndex + 1)) / 2 : levelIndex;
+    const price = referencePrice + direction * baseStep * multiplier;
+    if (!(price > 0)) {
+      throw new Error("Computed entry price is not positive");
+    }
+    return price;
+  }
+
+  private resolveStopPrice(signal: TradeSignal, entryPlans: EntryOrderPlan[]): number {
+    if (entryPlans.length === 0) {
+      throw new Error("Entry plans are required to resolve stop price");
+    }
+
+    const trailing = signal.trailingStop;
+    const staticStop = signal.stopLoss;
+
+    if (!trailing) {
+      if (staticStop === undefined) {
+        throw new Error("Stop loss must be provided");
+      }
+      return staticStop;
+    }
+
+    const reference = signal.side === "long"
+      ? Math.max(...entryPlans.map((plan) => plan.price))
+      : Math.min(...entryPlans.map((plan) => plan.price));
+
+    const offset = trailing.mode === "percent" ? reference * (trailing.value / 100) : trailing.value;
+    const trailingPrice = signal.side === "long" ? reference - offset : reference + offset;
+
+    if (!(trailingPrice > 0)) {
+      throw new Error("Trailing stop offset results in non-positive price");
+    }
+
+    if (signal.side === "long" && trailingPrice >= reference) {
+      throw new Error("Trailing stop must remain below entry price for long positions");
+    }
+    if (signal.side === "short" && trailingPrice <= reference) {
+      throw new Error("Trailing stop must remain above entry price for short positions");
+    }
+
+    if (staticStop === undefined) {
+      return trailingPrice;
+    }
+
+    return signal.side === "long" ? Math.max(staticStop, trailingPrice) : Math.min(staticStop, trailingPrice);
   }
 
   private formatSize(value: number, decimals: number): string {

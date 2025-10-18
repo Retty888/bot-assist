@@ -1,6 +1,38 @@
 export type TradeSide = "long" | "short";
 export type ExecutionType = "market" | "limit";
 
+export type DistanceMode = "percent" | "absolute";
+
+export interface DistanceConfig {
+  readonly value: number;
+  readonly mode: DistanceMode;
+}
+
+export interface TrailingStopConfig extends DistanceConfig {}
+
+export interface EntryStrategySingle {
+  readonly type: "single";
+}
+
+export interface EntryStrategyGrid {
+  readonly type: "grid";
+  readonly levels: number;
+  readonly spacing: DistanceConfig;
+}
+
+export interface EntryStrategyTrailing {
+  readonly type: "trailing";
+  readonly levels: number;
+  readonly step: DistanceConfig;
+}
+
+export type EntryStrategy = EntryStrategySingle | EntryStrategyGrid | EntryStrategyTrailing;
+
+interface TrailingStopMatch {
+  readonly config: TrailingStopConfig;
+  readonly sanitizedText: string;
+}
+
 export interface TradeSignal {
   readonly side: TradeSide;
   readonly symbol: string;
@@ -11,6 +43,8 @@ export interface TradeSignal {
   readonly takeProfits: number[];
   readonly leverage?: number;
   readonly execution: ExecutionType;
+  readonly trailingStop?: TrailingStopConfig;
+  readonly entryStrategy: EntryStrategy;
   readonly text: string;
 }
 
@@ -88,6 +122,23 @@ const LEVERAGE_PATTERNS = [
   /\b(?:leverage|lev)\b\s*(?:=|:)?\s*(\d+(?:[.,]\d+)?)/i,
 ];
 
+const TRAILING_STOP_PATTERNS = [
+  /\btrail(?:ing)?\s+stop\b(?:\s*(?:=|:))?\s*(\d+(?:[.,]\d+)?)(?:\s*(%|pct|percent|bps?|bp))?/i,
+  /\bts\b\s*(?:=|:)?\s*(\d+(?:[.,]\d+)?)(?:\s*(%|pct|percent|bps?|bp))?/i,
+];
+
+const GRID_PATTERNS = [
+  /\bgrid\s+(\d+)\s+(?:step\s+)?(\d+(?:[.,]\d+)?)(?:\s*(%|pct|percent|bps?|bp))?/i,
+  /\bgrid\s*(\d+)\s*[xX]\s*(\d+(?:[.,]\d+)?)(?:\s*(%|pct|percent|bps?|bp))?/i,
+  /\bgrid(\d+)[xX](\d+(?:[.,]\d+)?)(%|pct|percent|bps?|bp)?/i,
+];
+
+const TRAIL_ENTRY_PATTERNS = [
+  /\btrail(?:ing)?\s+(?:entry|entries)\s+(\d+)\s+(?:step\s+)?(\d+(?:[.,]\d+)?)(?:\s*(%|pct|percent|bps?|bp))?/i,
+  /\btrail(?:ing)?\s+(?:entry|entries)\s*(\d+)\s*[xX]\s*(\d+(?:[.,]\d+)?)(?:\s*(%|pct|percent|bps?|bp))?/i,
+  /\btrail(?:ing)?(?:entry|entries)?(\d+)[xX](\d+(?:[.,]\d+)?)(%|pct|percent|bps?|bp)?/i,
+];
+
 export function normalizeSymbol(raw: string): string {
   let symbol = raw.trim().toUpperCase();
   if (!symbol) {
@@ -117,6 +168,117 @@ function parseNumeric(value: string): number | undefined {
 
 function cleanToken(token: string): string {
   return token.replace(/^[^A-Za-z0-9@]+|[^A-Za-z0-9@]+$/g, "");
+}
+
+function parsePositiveInteger(raw: string, label: string): number {
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new TradeSignalParseError(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseDistanceConfig(rawValue: string, rawSuffix: string | undefined, label: string): DistanceConfig {
+  const numeric = parseNumeric(rawValue);
+  if (numeric === undefined || numeric <= 0) {
+    throw new TradeSignalParseError(`${label} must be a positive number`);
+  }
+
+  if (!rawSuffix) {
+    return {
+      value: numeric,
+      mode: "absolute",
+    } satisfies DistanceConfig;
+  }
+
+  const suffix = rawSuffix.trim().toLowerCase();
+  if (!suffix) {
+    return {
+      value: numeric,
+      mode: "absolute",
+    } satisfies DistanceConfig;
+  }
+
+  if (suffix === "%" || suffix === "percent" || suffix === "pct") {
+    return {
+      value: numeric,
+      mode: "percent",
+    } satisfies DistanceConfig;
+  }
+
+  if (suffix === "bp" || suffix === "bps") {
+    return {
+      value: numeric / 100,
+      mode: "percent",
+    } satisfies DistanceConfig;
+  }
+
+  throw new TradeSignalParseError(`${label} unit "${rawSuffix}" is not supported`);
+}
+
+function extractTrailingStop(text: string): TrailingStopMatch | undefined {
+  for (const pattern of TRAILING_STOP_PATTERNS) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(text);
+    if (!match) {
+      continue;
+    }
+    const [, valueRaw, suffixRaw] = match;
+    const config = parseDistanceConfig(valueRaw, suffixRaw, "Trailing stop");
+    const matchedText = match[0];
+    const start = match.index ?? text.indexOf(matchedText);
+    const end = start + matchedText.length;
+    const sanitizedText = `${text.slice(0, start)} ${text.slice(end)}`;
+    return {
+      config,
+      sanitizedText,
+    } satisfies TrailingStopMatch;
+  }
+  return undefined;
+}
+
+function extractEntryStrategy(text: string): EntryStrategy | undefined {
+  const strategies: EntryStrategy[] = [];
+
+  for (const pattern of TRAIL_ENTRY_PATTERNS) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(text);
+    if (!match) {
+      continue;
+    }
+    const [, levelsRaw, stepRaw, suffixRaw] = match;
+    const levels = parsePositiveInteger(levelsRaw, "Trailing entry levels");
+    const step = parseDistanceConfig(stepRaw, suffixRaw, "Trailing entry step");
+    strategies.push({
+      type: "trailing",
+      levels,
+      step,
+    });
+    break;
+  }
+
+  for (const pattern of GRID_PATTERNS) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(text);
+    if (!match) {
+      continue;
+    }
+    const [, levelsRaw, spacingRaw, suffixRaw] = match;
+    const levels = parsePositiveInteger(levelsRaw, "Grid levels");
+    const spacing = parseDistanceConfig(spacingRaw, suffixRaw, "Grid spacing");
+    strategies.push({
+      type: "grid",
+      levels,
+      spacing,
+    });
+    break;
+  }
+
+  if (strategies.length > 1) {
+    throw new TradeSignalParseError("Multiple entry strategies specified; choose either grid or trailing entries");
+  }
+
+  return strategies[0];
 }
 
 function extractSingle(text: string, patterns: RegExp[]): number | undefined {
@@ -267,15 +429,19 @@ export function parseTradeSignal(text: string): TradeSignal {
     execution = "market";
   }
 
-  const stopLoss = extractSingle(trimmed, STOP_PATTERNS);
+  const trailingStopMatch = extractTrailingStop(trimmed);
+  const stopScanText = trailingStopMatch?.sanitizedText ?? trimmed;
+  const stopLoss = extractSingle(stopScanText, STOP_PATTERNS);
   const takeProfits = extractTakeProfits(trimmed);
   const leverage = extractSingle(trimmed, LEVERAGE_PATTERNS);
+  const trailingStop = trailingStopMatch?.config;
+  const entryStrategy: EntryStrategy = extractEntryStrategy(trimmed) ?? { type: "single" };
 
   if (execution === "limit" && entryPrice === undefined) {
     execution = "market";
   }
 
-  if (stopLoss === undefined) {
+  if (stopLoss === undefined && !trailingStop) {
     throw new TradeSignalParseError("Stop loss is required");
   }
   if (takeProfits.length === 0) {
@@ -292,6 +458,8 @@ export function parseTradeSignal(text: string): TradeSignal {
     takeProfits,
     leverage,
     execution,
+    trailingStop,
+    entryStrategy,
     text: trimmed,
   };
 }

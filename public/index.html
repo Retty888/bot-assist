@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hyperliquid Signal Bot</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Manual Signal Executor</p>
+          <h1>Hyperliquid Signal Bot</h1>
+          <p class="lede">
+            Paste a trading signal to parse it and forward the normalized order to Hyperliquid.
+            Without credentials the bot runs in demo mode with mocked clients.
+          </p>
+        </div>
+        <aside class="runtime-hints">
+          <h2>Environment</h2>
+          <ul>
+            <li><code>HYPERLIQUID_PRIVATE_KEY</code></li>
+            <li><code>HYPERLIQUID_TESTNET</code> (default: true)</li>
+            <li><code>HYPERLIQUID_SLIPPAGE_BPS</code> (optional)</li>
+            <li><code>TRADING_SIGNAL</code> (optional override)</li>
+          </ul>
+          <h3>Signal Helpers</h3>
+          <ul class="syntax">
+            <li><code>trailing stop 0.5%</code> &rarr; dynamic stop offset</li>
+            <li><code>grid 3 150</code> &rarr; equal ladder spacing (absolute)</li>
+            <li><code>trail entry 4 0.25%</code> &rarr; geometric ladder (percent)</li>
+          </ul>
+        </aside>
+      </header>
+
+      <section class="card">
+        <form id="signal-form" autocomplete="off">
+          <label class="field-label" for="signal">Signal text</label>
+          <textarea id="signal" name="signal" placeholder="Enter signal..." spellcheck="false"></textarea>
+
+          <div class="actions">
+            <button type="submit" class="primary">Execute Signal</button>
+            <button type="button" id="btn-reset" class="ghost">Reset</button>
+            <button type="button" id="btn-sample" class="ghost">Load sample</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card advanced">
+        <header class="advanced-header">
+          <h2>Advanced Modules</h2>
+          <p>Toggle optional automation features and tailor their execution parameters.</p>
+        </header>
+
+        <div class="toggle-grid">
+          <button type="button" class="toggle" data-feature="trailingStop">Trailing Stop</button>
+          <button type="button" class="toggle" data-feature="grid">Grid Entries</button>
+          <button type="button" class="toggle" data-feature="trailEntry">Trailing Entries</button>
+        </div>
+
+        <div id="settings-trailingStop" class="feature-settings hidden">
+          <div class="settings-header">
+            <div>
+              <h3>Trailing Stop</h3>
+              <p>Offsets the stop relative to the best filled entry.</p>
+            </div>
+          </div>
+          <div class="field-row">
+            <label for="trailing-stop-value">Offset</label>
+            <div class="input-group">
+              <input type="number" id="trailing-stop-value" min="0.01" step="0.01" value="0.5" />
+              <select id="trailing-stop-unit">
+                <option value="percent">% (percent)</option>
+                <option value="absolute">Absolute</option>
+                <option value="bps">bps</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="settings-grid" class="feature-settings hidden">
+          <div class="settings-header">
+            <div>
+              <h3>Grid Entries</h3>
+              <p>Splits the position across evenly spaced limit orders.</p>
+            </div>
+          </div>
+          <div class="field-row">
+            <label for="grid-levels">Levels</label>
+            <input type="number" id="grid-levels" min="1" max="12" step="1" value="3" />
+          </div>
+          <div class="field-row">
+            <label for="grid-spacing-value">Spacing</label>
+            <div class="input-group">
+              <input type="number" id="grid-spacing-value" min="0.01" step="0.01" value="150" />
+              <select id="grid-spacing-unit">
+                <option value="absolute">Absolute</option>
+                <option value="percent">% (percent)</option>
+                <option value="bps">bps</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="settings-trailEntry" class="feature-settings hidden">
+          <div class="settings-header">
+            <div>
+              <h3>Trailing Entries</h3>
+              <p>Builds a geometric ladder to chase price with increasing offsets.</p>
+            </div>
+          </div>
+          <div class="field-row">
+            <label for="trail-entry-levels">Levels</label>
+            <input type="number" id="trail-entry-levels" min="1" max="12" step="1" value="4" />
+          </div>
+          <div class="field-row">
+            <label for="trail-entry-step-value">Step</label>
+            <div class="input-group">
+              <input type="number" id="trail-entry-step-value" min="0.01" step="0.01" value="0.25" />
+              <select id="trail-entry-step-unit">
+                <option value="percent">% (percent)</option>
+                <option value="absolute">Absolute</option>
+                <option value="bps">bps</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="snippet-preview">
+          <span>Auto append:</span>
+          <code id="auto-snippet">(none)</code>
+        </div>
+        <p id="auto-error" class="snippet-error"></p>
+      </section>
+
+      <section class="card output" id="status-card">
+        <div class="status-header">
+          <h2>Status</h2>
+          <span id="status-mode">Mode: &mdash;</span>
+        </div>
+        <div id="status-message" class="status-message">Ready when you are.</div>
+        <details class="details" open>
+          <summary>Parsed signal</summary>
+          <pre id="parsed-signal">(waiting)</pre>
+        </details>
+        <details class="details">
+          <summary>Order payload</summary>
+          <pre id="order-payload">(waiting)</pre>
+        </details>
+        <details class="details">
+          <summary>Exchange response</summary>
+          <pre id="exchange-response">(waiting)</pre>
+        </details>
+      </section>
+
+      <footer class="footer">
+        <p>
+          HTTP API: <code>POST /api/execute</code>
+          <small>Body: <code>{ "text": string }</code></small>
+        </p>
+        <p>
+          Default signal endpoint: <code>GET /api/default-signal</code>
+        </p>
+      </footer>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

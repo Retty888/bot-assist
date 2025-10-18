@@ -6,7 +6,7 @@ import type {
   OrderParameters,
   OrderResponseSuccess,
 } from "@nktkas/hyperliquid";
-import { HyperliquidTradingBot } from "../src/trading/hyperliquidTradingBot";
+import { HyperliquidTradingBot } from "../src/trading/hyperliquidTradingBot.js";
 
 type MetaAndAssetCtxsTuple = Awaited<ReturnType<InfoClient["metaAndAssetCtxs"]>>;
 type MetaResponse = MetaAndAssetCtxsTuple[0];
@@ -113,5 +113,46 @@ describe("HyperliquidTradingBot", () => {
     expect(entry.p).toBe("60000");
     expect(tp.t?.trigger?.tpsl).toBe("tp");
     expect(stop.t?.trigger?.tpsl).toBe("sl");
+  });
+
+  it("builds multi-level grid entry orders", async () => {
+    const info = new FakeInfoClient(baseMeta, baseContexts);
+    const exchange = new FakeExchangeClient();
+    const bot = new HyperliquidTradingBot({
+      infoClient: info as unknown as InfoClient,
+      exchangeClient: exchange as unknown as ExchangeClient,
+    });
+
+    await bot.executeSignalText(
+      "Long BTC 3 entry 60000 stop 58500 tp1 62500 tp2 63500 grid 3 150",
+    );
+
+    const payload = exchange.orders[0];
+    const [entry1, entry2, entry3] = payload.orders.slice(0, 3);
+    expect(payload.orders).toHaveLength(6);
+    expect(entry1.t?.limit?.tif).toBe("Gtc");
+    expect(entry2.t?.limit?.tif).toBe("Gtc");
+    expect(entry3.t?.limit?.tif).toBe("Gtc");
+    expect(entry1.p).toBe("60000");
+    expect(entry2.p).toBe("59850");
+    expect(entry3.p).toBe("59700");
+    expect(entry1.s).toBe("1");
+    expect(entry3.s).toBe("1");
+  });
+
+  it("derives trailing stop price when configured", async () => {
+    const info = new FakeInfoClient(baseMeta, baseContexts);
+    const exchange = new FakeExchangeClient();
+    const bot = new HyperliquidTradingBot({
+      infoClient: info as unknown as InfoClient,
+      exchangeClient: exchange as unknown as ExchangeClient,
+    });
+
+    await bot.executeSignalText("Long BTC 1 entry 60000 tp 63000 trailing stop 500");
+
+    const payload = exchange.orders[0];
+    const stopOrder = payload.orders[payload.orders.length - 1];
+    expect(stopOrder.t?.trigger?.tpsl).toBe("sl");
+    expect(stopOrder.p).toBe("59500");
   });
 });

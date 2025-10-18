@@ -8,12 +8,17 @@
     "test": "vitest run",
     "build": "tsc -p tsconfig.json",
     "format": "prettier -w .",
-    "test:watch": "vitest watch"
+    "test:watch": "vitest watch",
+    "start": "npm run build && node dist/server.js",
+    "start:dev": "node --loader ts-node/esm --experimental-specifier-resolution=node src/server.ts",
+    "start:cli": "node --loader ts-node/esm --experimental-specifier-resolution=node src/app.ts"
   },
   "dependencies": {
-    "@nktkas/hyperliquid": "^0.25.1"
+    "@nktkas/hyperliquid": "^0.25.1",
+    "express": "^4.19.2"
   },
   "devDependencies": {
+    "@types/express": "^5.0.3",
     "@types/node": "^20.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
