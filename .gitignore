@@ -28,3 +28,6 @@ vcpkg_installed/
 node_modules/
 src/UNKNOWN.egg-info/
 dist/
+playwright-report/
+test-results/
+.playwright-data/
