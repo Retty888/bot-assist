@@ -105,46 +105,77 @@
         </div>
 
         <div class="chart-grid">
-          <div class="chart-panel">
+          <article class="chart-panel snapshot-panel">
             <header class="chart-panel__header">
-              <h3>Price action</h3>
-              <p>Live candlesticks with execution layers.</p>
+              <h3>Chart snapshot</h3>
+              <p>Request a live capture of the market structure for the current signal.</p>
             </header>
-            <div id="price-chart" class="chart-canvas" role="img" aria-label="Candlestick chart"></div>
-            <ul id="layer-summary" class="layer-summary" aria-live="polite"></ul>
-          </div>
+            <div class="snapshot-controls">
+              <label>
+                <span>Interval</span>
+                <select id="snapshot-interval">
+                  <option value="15m">15m</option>
+                  <option value="1h" selected>1h</option>
+                  <option value="4h">4h</option>
+                  <option value="1d">1d</option>
+                </select>
+              </label>
+              <label>
+                <span>Range</span>
+                <select id="snapshot-range">
+                  <option value="1d">1 day</option>
+                  <option value="5d">5 days</option>
+                  <option value="1m">1 month</option>
+                </select>
+              </label>
+              <button type="button" id="snapshot-refresh" class="ghost">Refresh snapshot</button>
+            </div>
+            <figure class="snapshot-figure">
+              <img id="chart-snapshot" alt="Market snapshot" />
+              <figcaption id="snapshot-caption">Select a signal to capture its market context.</figcaption>
+            </figure>
+          </article>
 
-          <div class="chart-panel heatmap-panel">
+          <article class="chart-panel spotlight-panel">
             <header class="chart-panel__header">
-              <h3>Volume heatmap</h3>
-              <p>Relative liquidity bands around the current mid price.</p>
+              <h3>Signal spotlight</h3>
+              <p>Choose a curated or potential signal and inspect it against the chart snapshot.</p>
             </header>
-            <div id="volume-heatmap" class="heatmap-grid" role="list"></div>
-            <p id="volatility-hint" class="volatility-hint">—</p>
-          </div>
+            <div class="spotlight-body">
+              <label class="field-label" for="chart-signal-select">Focused signal</label>
+              <select id="chart-signal-select" aria-label="Select signal to preview on the chart"></select>
+              <div id="signal-spotlight-details" class="spotlight-details" aria-live="polite"></div>
+              <button type="button" id="spotlight-load" class="ghost">Load into editor</button>
+            </div>
+          </article>
         </div>
       </section>
 
-      <section class="card reference" id="reference-data">
-        <header class="reference-header">
+      <section class="card signal-library" id="signal-library">
+        <header class="signal-library__header">
           <div>
-            <h2>Test signals & demo positions</h2>
-            <p>Use these canned scenarios to explore execution flows without crafting text from scratch.</p>
+            <h2>Signal workspace</h2>
+            <p>Review curated playbooks, vet algorithmic ideas, and align open positions with their source signals.</p>
           </div>
           <div class="symbol-switch" role="group" aria-label="Select market symbol">
             <button type="button" class="symbol-chip active" data-symbol="BTC">BTC</button>
             <button type="button" class="symbol-chip" data-symbol="ETH">ETH</button>
           </div>
         </header>
-        <div class="reference-grid">
+        <div class="signal-library__grid">
           <article class="reference-block">
-            <h3>Sample signals</h3>
-            <p class="reference-lede">Click any card to drop its text into the editor.</p>
+            <h3>Curated playbook</h3>
+            <p class="reference-lede">Tap a setup to load it into the editor or spotlight it on the chart.</p>
             <div id="sample-signal-list" class="pill-list" role="list"></div>
           </article>
           <article class="reference-block">
-            <h3>Demo positions</h3>
-            <p class="reference-lede">Mock exposure table used for sanity checks when tuning strategies.</p>
+            <h3>Potential signals</h3>
+            <p class="reference-lede">Ideas captured manually or surfaced by algorithms awaiting validation.</p>
+            <div id="potential-signal-list" class="card-list" role="list"></div>
+          </article>
+          <article class="reference-block reference-block--wide">
+            <h3>Positions & signal alignment</h3>
+            <p class="reference-lede">Manage saved positions and link them back to their originating signals.</p>
             <div class="position-controls">
               <label class="field-label" for="position-select">Saved positions</label>
               <div class="position-select-row">
@@ -218,108 +249,120 @@
         </div>
       </section>
 
-      <section class="card">
-        <form id="signal-form" autocomplete="off">
-          <label class="field-label" for="signal">Signal text</label>
-          <textarea id="signal" name="signal" placeholder="Enter signal..." spellcheck="false"></textarea>
-          <div class="hint-slot" data-hint-slot="signal" aria-live="polite"></div>
-
-          <div class="actions">
-            <button type="submit" class="primary">Execute Signal</button>
-            <button type="button" id="btn-reset" class="ghost">Reset</button>
-            <button type="button" id="btn-sample" class="ghost">Load sample</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="card advanced">
-        <header class="advanced-header">
-          <h2>Advanced Modules</h2>
-          <p>Toggle optional automation features and tailor their execution parameters.</p>
+      <section class="card signal-execution" id="signal-execution">
+        <header class="signal-execution__header">
+          <h2>Signal builder &amp; execution</h2>
+          <p>Drop raw text from signal groups, tweak automation modules, and dispatch trades.</p>
         </header>
+        <div class="signal-execution__grid">
+          <form id="signal-form" class="signal-editor" autocomplete="off">
+            <label class="field-label" for="signal">Signal intake</label>
+            <textarea
+              id="signal"
+              name="signal"
+              placeholder="Paste signal text or build it manually..."
+              spellcheck="false"
+            ></textarea>
+            <p class="field-hint">Supports copy/paste from Telegram, Discord, and email signal groups.</p>
+            <div class="hint-slot" data-hint-slot="signal" aria-live="polite"></div>
 
-        <div class="toggle-grid">
-          <button type="button" class="toggle" data-feature="trailingStop">Trailing Stop</button>
-          <button type="button" class="toggle" data-feature="grid">Grid Entries</button>
-          <button type="button" class="toggle" data-feature="trailEntry">Trailing Entries</button>
-        </div>
+            <div class="actions">
+              <button type="submit" class="primary">Execute Signal</button>
+              <button type="button" id="btn-reset" class="ghost">Reset</button>
+              <button type="button" id="btn-sample" class="ghost">Load sample</button>
+            </div>
+          </form>
 
-        <div id="settings-trailingStop" class="feature-settings hidden">
-          <div class="settings-header">
-            <div>
-              <h3>Trailing Stop</h3>
-              <p>Offsets the stop relative to the best filled entry.</p>
+          <aside class="advanced" aria-labelledby="advanced-title">
+            <div class="advanced-header">
+              <h2 id="advanced-title">Automation modules</h2>
+              <p>Keep trailing stops, grid entries, and other execution helpers close to the builder.</p>
             </div>
-          </div>
-          <div class="field-row">
-            <label for="trailing-stop-value">Offset</label>
-            <div class="input-group">
-              <input type="number" id="trailing-stop-value" min="0.01" step="0.01" value="0.5" />
-              <select id="trailing-stop-unit">
-                <option value="percent">% (percent)</option>
-                <option value="absolute">Absolute</option>
-                <option value="bps">bps</option>
-              </select>
-            </div>
-          </div>
-          <div class="hint-slot" data-hint-slot="trailingStop" aria-live="polite"></div>
-        </div>
 
-        <div id="settings-grid" class="feature-settings hidden">
-          <div class="settings-header">
-            <div>
-              <h3>Grid Entries</h3>
-              <p>Splits the position across evenly spaced limit orders.</p>
+            <div class="toggle-grid">
+              <button type="button" class="toggle" data-feature="trailingStop">Trailing Stop</button>
+              <button type="button" class="toggle" data-feature="grid">Grid Entries</button>
+              <button type="button" class="toggle" data-feature="trailEntry">Trailing Entries</button>
             </div>
-          </div>
-          <div class="field-row">
-            <label for="grid-levels">Levels</label>
-            <input type="number" id="grid-levels" min="1" max="12" step="1" value="3" />
-          </div>
-          <div class="field-row">
-            <label for="grid-spacing-value">Spacing</label>
-            <div class="input-group">
-              <input type="number" id="grid-spacing-value" min="0.01" step="0.01" value="150" />
-              <select id="grid-spacing-unit">
-                <option value="absolute">Absolute</option>
-                <option value="percent">% (percent)</option>
-                <option value="bps">bps</option>
-              </select>
-            </div>
-          </div>
-          <div class="hint-slot" data-hint-slot="grid" aria-live="polite"></div>
-        </div>
 
-        <div id="settings-trailEntry" class="feature-settings hidden">
-          <div class="settings-header">
-            <div>
-              <h3>Trailing Entries</h3>
-              <p>Builds a geometric ladder to chase price with increasing offsets.</p>
+            <div id="settings-trailingStop" class="feature-settings hidden">
+              <div class="settings-header">
+                <div>
+                  <h3>Trailing Stop</h3>
+                  <p>Offsets the stop relative to the best filled entry.</p>
+                </div>
+              </div>
+              <div class="field-row">
+                <label for="trailing-stop-value">Offset</label>
+                <div class="input-group">
+                  <input type="number" id="trailing-stop-value" min="0.01" step="0.01" value="0.5" />
+                  <select id="trailing-stop-unit">
+                    <option value="percent">% (percent)</option>
+                    <option value="absolute">Absolute</option>
+                    <option value="bps">bps</option>
+                  </select>
+                </div>
+              </div>
+              <div class="hint-slot" data-hint-slot="trailingStop" aria-live="polite"></div>
             </div>
-          </div>
-          <div class="field-row">
-            <label for="trail-entry-levels">Levels</label>
-            <input type="number" id="trail-entry-levels" min="1" max="12" step="1" value="4" />
-          </div>
-          <div class="field-row">
-            <label for="trail-entry-step-value">Step</label>
-            <div class="input-group">
-              <input type="number" id="trail-entry-step-value" min="0.01" step="0.01" value="0.25" />
-              <select id="trail-entry-step-unit">
-                <option value="percent">% (percent)</option>
-                <option value="absolute">Absolute</option>
-                <option value="bps">bps</option>
-              </select>
-            </div>
-          </div>
-          <div class="hint-slot" data-hint-slot="trailEntry" aria-live="polite"></div>
-        </div>
 
-        <div class="snippet-preview">
-          <span>Auto append:</span>
-          <code id="auto-snippet">(none)</code>
+            <div id="settings-grid" class="feature-settings hidden">
+              <div class="settings-header">
+                <div>
+                  <h3>Grid Entries</h3>
+                  <p>Splits the position across evenly spaced limit orders.</p>
+                </div>
+              </div>
+              <div class="field-row">
+                <label for="grid-levels">Levels</label>
+                <input type="number" id="grid-levels" min="1" max="12" step="1" value="3" />
+              </div>
+              <div class="field-row">
+                <label for="grid-spacing-value">Spacing</label>
+                <div class="input-group">
+                  <input type="number" id="grid-spacing-value" min="0.01" step="0.01" value="150" />
+                  <select id="grid-spacing-unit">
+                    <option value="absolute">Absolute</option>
+                    <option value="percent">% (percent)</option>
+                    <option value="bps">bps</option>
+                  </select>
+                </div>
+              </div>
+              <div class="hint-slot" data-hint-slot="grid" aria-live="polite"></div>
+            </div>
+
+            <div id="settings-trailEntry" class="feature-settings hidden">
+              <div class="settings-header">
+                <div>
+                  <h3>Trailing Entries</h3>
+                  <p>Builds a geometric ladder to chase price with increasing offsets.</p>
+                </div>
+              </div>
+              <div class="field-row">
+                <label for="trail-entry-levels">Levels</label>
+                <input type="number" id="trail-entry-levels" min="1" max="12" step="1" value="4" />
+              </div>
+              <div class="field-row">
+                <label for="trail-entry-step-value">Step</label>
+                <div class="input-group">
+                  <input type="number" id="trail-entry-step-value" min="0.01" step="0.01" value="0.25" />
+                  <select id="trail-entry-step-unit">
+                    <option value="percent">% (percent)</option>
+                    <option value="absolute">Absolute</option>
+                    <option value="bps">bps</option>
+                  </select>
+                </div>
+              </div>
+              <div class="hint-slot" data-hint-slot="trailEntry" aria-live="polite"></div>
+            </div>
+
+            <div class="snippet-preview">
+              <span>Auto append:</span>
+              <code id="auto-snippet">(none)</code>
+            </div>
+            <p id="auto-error" class="snippet-error"></p>
+          </aside>
         </div>
-        <p id="auto-error" class="snippet-error"></p>
       </section>
 
       <section class="card hints" id="hints-card">
@@ -383,10 +426,10 @@
 
       <section class="card history" id="history-card">
         <header class="history-header">
-          <h2>Execution tracking</h2>
-          <button type="button" id="history-clear" class="ghost">Clear history</button>
+          <h2>Open signals &amp; trackers</h2>
+          <button type="button" id="history-clear" class="ghost">Clear log</button>
         </header>
-        <p id="history-empty" class="history-empty">No executions yet — run a signal to populate the log.</p>
+        <p id="history-empty" class="history-empty">No tracked signals yet — execute or import one to begin tracking.</p>
         <ol id="history-list" class="history-list" aria-live="polite"></ol>
       </section>
 
