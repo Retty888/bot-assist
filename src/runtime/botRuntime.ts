@@ -10,6 +10,11 @@ import {
   type HyperliquidBotOptions,
 } from "../trading/hyperliquidTradingBot.js";
 import { normalizeSymbol } from "../trading/tradeSignalParser.js";
+import {
+  loadCandles as loadStoredCandles,
+  saveCandles as saveStoredCandles,
+  type Candle as StoredCandle,
+} from "../storage/candlesStore.js";
 
 export const DEFAULT_SIGNAL =
   "Long BTC size 2 entry 60420 stop 58650 tp1 63100 tp2 64250 30m risk medium trailing stop 0.6%";
@@ -229,6 +234,8 @@ export interface RuntimeConfig {
 }
 
 const DEFAULT_CACHE_TTL_MS = 5_000;
+const DEFAULT_CANDLE_INTERVAL = "1m";
+const DEFAULT_CANDLE_INTERVAL_MS = 60_000;
 
 let sharedTransport: HttpTransport | undefined;
 let sharedInfoClient: InfoClient | DemoInfoClient | undefined;
@@ -314,49 +321,76 @@ function generateSyntheticCandles(
   return candles;
 }
 
+function toRuntimeCandles(candles: readonly StoredCandle[]): CandleDatum[] {
+  return candles.map((candle) => ({
+    time: Math.round(candle.timestamp / 1_000),
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: candle.volume,
+  }));
+}
+
 async function fetchRealCandles(
   infoClient: InfoClient,
   assetName: string,
   points: number,
 ): Promise<CandleDatum[] | undefined> {
+  const storageKey = { symbol: assetName, interval: DEFAULT_CANDLE_INTERVAL } as const;
+  const cachedCandles = await loadStoredCandles({ ...storageKey, limit: points });
+
+  const endTime = Date.now();
+  const startTime = endTime - points * DEFAULT_CANDLE_INTERVAL_MS;
+
   try {
-    const endTime = Date.now();
-    const intervalMinutes = 1;
-    const startTime = endTime - points * intervalMinutes * 60_000;
     const response = await infoClient.candleSnapshot({
       coin: assetName,
-      interval: "1m",
+      interval: DEFAULT_CANDLE_INTERVAL,
       startTime,
       endTime,
     });
     if (!Array.isArray(response) || response.length === 0) {
-      return undefined;
+      return cachedCandles.length > 0 ? toRuntimeCandles(cachedCandles) : undefined;
     }
-    const candles = response
+
+    const normalized = response
       .map((item) => ({
-        time: Number(item.t) / 1000,
+        timestamp: Number(item.t),
         open: Number(item.o),
         high: Number(item.h),
         low: Number(item.l),
         close: Number(item.c),
         volume: Number(item.v),
       }))
-      .filter((item) =>
-        Number.isFinite(item.time) &&
-        Number.isFinite(item.open) &&
-        Number.isFinite(item.high) &&
-        Number.isFinite(item.low) &&
-        Number.isFinite(item.close) &&
-        Number.isFinite(item.volume),
+      .filter(
+        (item): item is StoredCandle =>
+          Number.isFinite(item.timestamp) &&
+          Number.isFinite(item.open) &&
+          Number.isFinite(item.high) &&
+          Number.isFinite(item.low) &&
+          Number.isFinite(item.close) &&
+          Number.isFinite(item.volume),
       );
-    if (candles.length === 0) {
-      return undefined;
+
+    if (normalized.length > 0) {
+      normalized.sort((a, b) => a.timestamp - b.timestamp);
+      await saveStoredCandles({ ...storageKey, candles: normalized });
     }
-    candles.sort((a, b) => a.time - b.time);
-    return candles.slice(-points);
+
+    const mergedCandles = await loadStoredCandles({ ...storageKey, limit: points });
+    if (mergedCandles.length > 0) {
+      return toRuntimeCandles(mergedCandles);
+    }
+
+    if (normalized.length > 0) {
+      return toRuntimeCandles(normalized.slice(-points));
+    }
+
+    return cachedCandles.length > 0 ? toRuntimeCandles(cachedCandles) : undefined;
   } catch (error) {
     console.warn(`Failed to fetch real candles for ${assetName}:`, error);
-    return undefined;
+    return cachedCandles.length > 0 ? toRuntimeCandles(cachedCandles) : undefined;
   }
 }
 
