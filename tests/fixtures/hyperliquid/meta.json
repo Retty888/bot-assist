@@ -1,0 +1,10 @@
+{
+  "universe": [
+    {
+      "name": "BTC",
+      "maxLeverage": 100,
+      "szDecimals": 3
+    }
+  ],
+  "collateralToken": 0
+}
