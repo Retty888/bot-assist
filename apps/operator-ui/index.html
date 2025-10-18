@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Operator Control Center</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="top-bar">
+      <div class="brand">
+        <h1>Operator Control Center</h1>
+        <p class="subtitle">Готовность к исполнению сигналов</p>
+      </div>
+      <div class="status-pills">
+        <span class="pill pill-online" id="connection-pill">API подключено</span>
+        <span class="pill pill-sync">Синхронизация сигналов в норме</span>
+        <span class="pill pill-risk">Риск-лимиты в зелёной зоне</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="layout__column layout__column--left">
+        <article class="card summary">
+          <h2>Сводка статусов</h2>
+          <ul class="summary-list" id="summary-list"></ul>
+        </article>
+
+        <article class="card quick-actions">
+          <h2>Быстрые действия</h2>
+          <div class="quick-actions__grid">
+            <button data-action="refresh-signals">Обновить сигналы</button>
+            <button data-action="pause-automation">Пауза автоматизации</button>
+            <button data-action="resolve-alerts">Закрыть алерты</button>
+            <button data-action="new-manual-order">Ручной ордер</button>
+          </div>
+          <p class="helper-text">
+            Используйте действия слева для реакций на инциденты без перехода в другие разделы.
+          </p>
+        </article>
+
+        <article class="card trackers">
+          <h2>Мониторинг трекеров</h2>
+          <ul class="tracker-list" id="tracker-list"></ul>
+        </article>
+      </section>
+
+      <section class="layout__column layout__column--right">
+        <article class="card form-card">
+          <header class="card__header">
+            <div>
+              <h2>Загрузка сигнала</h2>
+              <p class="caption">
+                Минимальная форма: достаточно указать источник и параметризацию. Дополнительные опции свернуты.
+              </p>
+            </div>
+            <button class="toggle" data-target="advanced-fields">Раскрыть доп. опции</button>
+          </header>
+          <form class="form" id="signal-form">
+            <label>
+              Источник сигнала
+              <select name="signal-source">
+                <option value="spotlight">Spotlight каталог</option>
+                <option value="manual">Ввод вручную</option>
+                <option value="webhook">Webhook</option>
+              </select>
+            </label>
+
+            <label>
+              Символ рынка
+              <input type="text" name="symbol" placeholder="Например, ETH-PERP" required />
+            </label>
+
+            <label class="inline">
+              Параметр лота
+              <input type="number" name="size" min="1" step="1" value="1" />
+              <span class="inline__suffix">контракты</span>
+            </label>
+
+            <fieldset id="advanced-fields" hidden>
+              <legend>Продвинутые настройки</legend>
+              <label>
+                Комментарий оператора
+                <textarea name="notes" rows="3" placeholder="Контекст для команды" ></textarea>
+              </label>
+
+              <label>
+                Таймаут исполнения (мин)
+                <input type="number" name="timeout" min="1" max="120" step="5" value="30" />
+              </label>
+            </fieldset>
+
+            <div class="form__actions">
+              <button type="submit" class="primary">Отправить в исполнение</button>
+              <button type="button" class="ghost" data-action="save-draft">Сохранить черновик</button>
+            </div>
+          </form>
+        </article>
+
+        <article class="card orders">
+          <header class="card__header">
+            <div>
+              <h2>Статусы заказов</h2>
+              <p class="caption">Показываются последние изменения и приоритетные ошибки.</p>
+            </div>
+            <div class="filters">
+              <label>
+                <span>Фильтр</span>
+                <select id="order-filter">
+                  <option value="all">Все</option>
+                  <option value="active">Активные</option>
+                  <option value="attention">Требуют внимания</option>
+                </select>
+              </label>
+            </div>
+          </header>
+          <ul class="order-list" id="order-list"></ul>
+        </article>
+      </section>
+    </main>
+
+    <aside class="help-panel" id="help-panel" hidden>
+      <h2>Справка и onboarding</h2>
+      <ol>
+        <li>Проверьте сводку статусов — красные индикаторы требуют внимания.</li>
+        <li>Используйте быстрые действия для моментальных ответов без потери контекста.</li>
+        <li>Для новых сигналов заполните основную часть формы, доп. настройки открываются по требованию.</li>
+        <li>В списке заказов отметки «⚠» показывают причины остановки — кликните для подробностей.</li>
+      </ol>
+      <button class="ghost" data-action="close-help">Закрыть</button>
+    </aside>
+
+    <button class="help-trigger" data-action="open-help">Справка</button>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
