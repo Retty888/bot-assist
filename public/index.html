@@ -104,6 +104,42 @@
         </div>
       </section>
 
+      <section class="card reference" id="reference-data">
+        <header class="reference-header">
+          <div>
+            <h2>Test signals & demo positions</h2>
+            <p>Use these canned scenarios to explore execution flows without crafting text from scratch.</p>
+          </div>
+          <div class="symbol-switch" role="group" aria-label="Select market symbol">
+            <button type="button" class="symbol-chip active" data-symbol="BTC">BTC</button>
+            <button type="button" class="symbol-chip" data-symbol="ETH">ETH</button>
+          </div>
+        </header>
+        <div class="reference-grid">
+          <article class="reference-block">
+            <h3>Sample signals</h3>
+            <p class="reference-lede">Click any card to drop its text into the editor.</p>
+            <div id="sample-signal-list" class="pill-list" role="list"></div>
+          </article>
+          <article class="reference-block">
+            <h3>Demo positions</h3>
+            <p class="reference-lede">Mock exposure table used for sanity checks when tuning strategies.</p>
+            <table class="position-table" aria-live="polite">
+              <thead>
+                <tr>
+                  <th scope="col">Symbol</th>
+                  <th scope="col">Side</th>
+                  <th scope="col">Size</th>
+                  <th scope="col">Entry</th>
+                  <th scope="col">P&L</th>
+                </tr>
+              </thead>
+              <tbody id="demo-position-rows"></tbody>
+            </table>
+          </article>
+        </div>
+      </section>
+
       <section class="card">
         <form id="signal-form" autocomplete="off">
           <label class="field-label" for="signal">Signal text</label>

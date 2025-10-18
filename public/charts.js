@@ -33,16 +33,18 @@ const layerColorMap = {
   },
 };
 
+const TEXT_PLACEHOLDER = "—";
+
 function formatCurrency(value) {
   if (!Number.isFinite(value)) {
-    return "—";
+    return TEXT_PLACEHOLDER;
   }
   return currencyFormatter.format(value);
 }
 
 function formatSpread(usd, bps) {
   if (!Number.isFinite(usd) || !Number.isFinite(bps)) {
-    return "—";
+    return TEXT_PLACEHOLDER;
   }
   const formattedUsd = currencyFormatter.format(usd);
   return `${formattedUsd} (${bps.toFixed(1)} bps)`;
@@ -50,21 +52,21 @@ function formatSpread(usd, bps) {
 
 function formatPercent(value) {
   if (!Number.isFinite(value)) {
-    return "—";
+    return TEXT_PLACEHOLDER;
   }
   return `${value.toFixed(2)}%`;
 }
 
 function formatFunding(value) {
   if (!Number.isFinite(value)) {
-    return "—";
+    return TEXT_PLACEHOLDER;
   }
   return `${(value * 100).toFixed(3)}%`;
 }
 
 function formatVolume(value) {
   if (!Number.isFinite(value)) {
-    return "—";
+    return TEXT_PLACEHOLDER;
   }
   return compactFormatter.format(value);
 }
@@ -98,6 +100,7 @@ export function initializeMarketDashboard(options) {
   let priceLines = [];
   let cachedLayers = null;
   let destroyed = false;
+  const snapshotCache = new Map();
 
   const chart = chartLibrary.createChart(chartElement, {
     width: chartElement.clientWidth,
@@ -144,10 +147,10 @@ export function initializeMarketDashboard(options) {
     renderLayers(cachedLayers);
   }
 
-  function updateMetrics(snapshot) {
-    if (metrics.symbol) {
-      metrics.symbol.textContent = snapshot?.symbol ?? "—";
-    }
+function updateMetrics(snapshot) {
+  if (metrics.symbol) {
+    metrics.symbol.textContent = snapshot?.symbol ?? TEXT_PLACEHOLDER;
+  }
     if (metrics.mid) {
       metrics.mid.textContent = formatCurrency(snapshot?.midPrice);
     }
@@ -163,22 +166,22 @@ export function initializeMarketDashboard(options) {
     if (metrics.volume) {
       metrics.volume.textContent = formatVolume(snapshot?.dayBaseVolume);
     }
-    if (metrics.updated) {
-      const timestamp = snapshot?.timestamp;
-      metrics.updated.textContent = timestamp
-        ? new Date(timestamp).toLocaleTimeString()
-        : "—";
-    }
-    if (metrics.modeBadge) {
+  if (metrics.updated) {
+    const timestamp = snapshot?.timestamp;
+    metrics.updated.textContent = timestamp
+      ? new Date(timestamp).toLocaleTimeString()
+      : TEXT_PLACEHOLDER;
+  }
+  if (metrics.modeBadge) {
       const demoMode = Boolean(snapshot?.demoMode);
       metrics.modeBadge.textContent = demoMode ? "Demo data" : "Live data";
       metrics.modeBadge.classList.toggle("badge--demo", demoMode);
       metrics.modeBadge.classList.toggle("badge--live", !demoMode);
     }
-    if (volatilityHintElement) {
-      volatilityHintElement.textContent = snapshot?.volatilityHint ?? "—";
-    }
+  if (volatilityHintElement) {
+    volatilityHintElement.textContent = snapshot?.volatilityHint ?? TEXT_PLACEHOLDER;
   }
+}
 
   function clearPriceLines() {
     priceLines.forEach((line) => {
@@ -263,38 +266,52 @@ export function initializeMarketDashboard(options) {
     });
   }
 
-  function applySnapshot(snapshot) {
+function applySnapshot(snapshot) {
     if (!snapshot) {
       return;
     }
-    currentSymbol = snapshot.normalizedSymbol ?? currentSymbol;
+    const normalized = (snapshot.normalizedSymbol ?? currentSymbol ?? "").toUpperCase();
+    if (normalized) {
+      currentSymbol = normalized;
+      snapshotCache.set(normalized, snapshot);
+    }
     candleSeries.setData(Array.isArray(snapshot.candles) ? snapshot.candles : []);
     updateMetrics(snapshot);
     renderHeatmap(snapshot.volumeDistribution ?? []);
     renderLayers(snapshot.layers);
   }
 
-  async function fetchSnapshot(immediate = false) {
+  async function fetchSymbolSnapshot(symbol) {
+    const resolvedSymbol = (symbol ?? currentSymbol ?? "BTC").toUpperCase();
+    const signal = signalProvider()?.trim();
+    const payload = { symbol: resolvedSymbol };
+    if (signal) {
+      payload.signal = signal;
+    }
+    const response = await fetch("/api/market-data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(typeof data?.error === "string" ? data.error : "Request failed");
+    }
+    const cacheKey = (data.normalizedSymbol ?? resolvedSymbol).toUpperCase();
+    snapshotCache.set(cacheKey, data);
+    return data;
+  }
+
+  async function fetchSnapshot(immediate = false, symbolOverride) {
     if (pending || destroyed) {
       return;
     }
     pending = true;
     try {
-      const signal = signalProvider()?.trim();
-      const payload = { symbol: currentSymbol };
-      if (signal) {
-        payload.signal = signal;
-      }
-      const response = await fetch("/api/market-data", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(typeof data?.error === "string" ? data.error : "Request failed");
-      }
-      applySnapshot(data);
+      const targetSymbol = (symbolOverride ?? currentSymbol ?? options?.initialSymbol ?? "BTC").toUpperCase();
+      const snapshot = await fetchSymbolSnapshot(targetSymbol);
+      currentSymbol = (snapshot.normalizedSymbol ?? targetSymbol).toUpperCase();
+      applySnapshot(snapshot);
       scheduleRefresh(REFRESH_INTERVAL_MS);
     } catch (error) {
       console.error("Failed to load market data", error);
@@ -337,6 +354,32 @@ export function initializeMarketDashboard(options) {
     },
     scheduleRefresh() {
       fetchSnapshot(true);
+    },
+    setSymbol(symbol) {
+      const normalized = typeof symbol === "string" ? symbol.trim().toUpperCase() : "";
+      if (!normalized) {
+        return;
+      }
+      currentSymbol = normalized;
+      const cached = snapshotCache.get(normalized);
+      if (cached) {
+        applySnapshot(cached);
+      }
+      fetchSnapshot(true, normalized);
+    },
+    async preloadSymbols(symbols) {
+      const list = Array.isArray(symbols) ? symbols : [];
+      for (const raw of list) {
+        const normalized = typeof raw === "string" ? raw.trim().toUpperCase() : "";
+        if (!normalized || snapshotCache.has(normalized)) {
+          continue;
+        }
+        try {
+          await fetchSymbolSnapshot(normalized);
+        } catch (error) {
+          console.warn("Failed to preload market snapshot", normalized, error);
+        }
+      }
     },
     destroy() {
       destroyed = true;

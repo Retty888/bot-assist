@@ -43,6 +43,29 @@ const hintContextElements = {
   funding: document.getElementById("hint-funding"),
 };
 
+const sampleSignalList = document.getElementById("sample-signal-list");
+const demoPositionRows = document.getElementById("demo-position-rows");
+const symbolChips = Array.from(document.querySelectorAll(".symbol-chip"));
+
+const UI_PLACEHOLDER = "—";
+
+const usdFormatter = new Intl.NumberFormat(undefined, {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+const priceFormatter = new Intl.NumberFormat(undefined, {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 2,
+});
+
+const sizeFormatter = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 3,
+});
+
 const hintSlotElements = Array.from(document.querySelectorAll("[data-hint-slot]"))
   .filter((element) => element instanceof HTMLElement)
   .reduce((acc, element) => {
@@ -148,6 +171,50 @@ function createDefaultFeatureState() {
 }
 
 const featureState = createDefaultFeatureState();
+
+const DEMO_SIGNALS = [
+  {
+    id: "btc-breakout",
+    label: "BTC ladder breakout",
+    description: "Grid ×3 @ $120 + trailing stop 0.4%",
+    symbol: "BTC",
+    text:
+      "Long BTC 3 entry 60000 stop 58500 tp1 62500 tp2 63500 trailing stop 0.4% grid 3 120",
+    preset: {
+      trailingStop: { value: 0.4, unit: "percent" },
+      grid: { levels: 3, spacingValue: 120, unit: "absolute" },
+    },
+  },
+  {
+    id: "eth-momentum",
+    label: "ETH momentum fade",
+    description: "Trailing entries ×4 @ 0.35% + stop 0.6%",
+    symbol: "ETH",
+    text:
+      "Short ETH size 4 entry 3520 stop 3650 tp1 3300 tp2 3200 trail entry 4 0.35% trailing stop 0.6%",
+    preset: {
+      trailingStop: { value: 0.6, unit: "percent" },
+      trailEntry: { levels: 4, stepValue: 0.35, unit: "percent" },
+    },
+  },
+  {
+    id: "btc-swing",
+    label: "BTC swing reload",
+    description: "Single entry + trailing stop 1.0%",
+    symbol: "BTC",
+    text:
+      "Long BTC 1.5 entry 59850 stop 58200 tp1 62400 tp2 63800 trailing stop 1% market",
+    preset: {
+      trailingStop: { value: 1, unit: "percent" },
+    },
+  },
+];
+
+const DEMO_POSITIONS = [
+  { symbol: "BTC-PERP", side: "Long", size: 1.8, entry: 60210, pnl: 485 },
+  { symbol: "ETH-PERP", side: "Short", size: 4.4, entry: 3542, pnl: -132 },
+  { symbol: "SOL-PERP", side: "Long", size: 280, entry: 145.3, pnl: 96 },
+];
 
 let hintManager = null;
 
@@ -370,6 +437,149 @@ function resetFeatures() {
   updateSnippetPreview();
   hintManager?.scheduleRefresh();
 }
+
+
+function applyFeaturePreset(preset) {
+  resetFeatures();
+  if (!preset) {
+    return;
+  }
+
+  if (preset.trailingStop) {
+    featureState.trailingStop.enabled = true;
+    featureState.trailingStop.value = preset.trailingStop.value ?? featureState.trailingStop.value;
+    featureState.trailingStop.unit = preset.trailingStop.unit ?? featureState.trailingStop.unit;
+  }
+
+  if (preset.grid) {
+    featureState.grid.enabled = true;
+    featureState.grid.levels = preset.grid.levels ?? featureState.grid.levels;
+    featureState.grid.spacingValue = preset.grid.spacingValue ?? featureState.grid.spacingValue;
+    featureState.grid.unit = preset.grid.unit ?? featureState.grid.unit;
+    featureState.trailEntry.enabled = false;
+  }
+
+  if (preset.trailEntry) {
+    featureState.trailEntry.enabled = true;
+    featureState.trailEntry.levels = preset.trailEntry.levels ?? featureState.trailEntry.levels;
+    featureState.trailEntry.stepValue = preset.trailEntry.stepValue ?? featureState.trailEntry.stepValue;
+    featureState.trailEntry.unit = preset.trailEntry.unit ?? featureState.trailEntry.unit;
+    featureState.grid.enabled = false;
+  }
+
+  applyStateToInputs();
+  updateAllFeatureUI();
+  updateSnippetPreview();
+  hintManager?.scheduleRefresh();
+}
+
+
+function formatUsd(value, { showSign = false } = {}) {
+  if (!Number.isFinite(value)) {
+    return UI_PLACEHOLDER;
+  }
+  const formatted = usdFormatter.format(value);
+  if (showSign && value > 0) {
+    return `+${formatted}`;
+  }
+  return formatted;
+}
+
+
+function formatSize(value) {
+  if (!Number.isFinite(value)) {
+    return UI_PLACEHOLDER;
+  }
+  return sizeFormatter.format(value);
+}
+
+
+function renderSampleSignals() {
+  if (!sampleSignalList) {
+    return;
+  }
+  sampleSignalList.innerHTML = "";
+  DEMO_SIGNALS.forEach((signal) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.innerHTML = `<strong>${signal.label}</strong><span>${signal.description}</span>`;
+    button.addEventListener("click", () => {
+      textarea.value = signal.text;
+      applyFeaturePreset(signal.preset);
+      if (signal.symbol) {
+        setActiveSymbolChip(signal.symbol);
+        marketDashboard?.setSymbol(signal.symbol);
+      } else {
+        marketDashboard?.scheduleRefresh();
+      }
+      textarea.focus();
+    });
+    sampleSignalList.appendChild(button);
+  });
+}
+
+
+function renderDemoPositions() {
+  if (!demoPositionRows) {
+    return;
+  }
+  demoPositionRows.innerHTML = "";
+  DEMO_POSITIONS.forEach((position) => {
+    const row = document.createElement("tr");
+
+    const symbolCell = document.createElement("td");
+    symbolCell.textContent = position.symbol;
+    row.appendChild(symbolCell);
+
+    const sideCell = document.createElement("td");
+    sideCell.textContent = position.side;
+    row.appendChild(sideCell);
+
+    const sizeCell = document.createElement("td");
+    sizeCell.textContent = formatSize(position.size);
+    row.appendChild(sizeCell);
+
+    const entryCell = document.createElement("td");
+    entryCell.textContent = Number.isFinite(position.entry)
+      ? priceFormatter.format(position.entry)
+      : UI_PLACEHOLDER;
+    row.appendChild(entryCell);
+
+    const pnlCell = document.createElement("td");
+    pnlCell.textContent = formatUsd(position.pnl, { showSign: true });
+    pnlCell.dataset.positive = ((position.pnl ?? 0) >= 0).toString();
+    row.appendChild(pnlCell);
+
+    demoPositionRows.appendChild(row);
+  });
+}
+
+
+function setActiveSymbolChip(symbol) {
+  const normalized = (symbol ?? "").toUpperCase();
+  symbolChips.forEach((chip) => {
+    if (!(chip instanceof HTMLElement)) {
+      return;
+    }
+    const matches = (chip.dataset.symbol ?? "").toUpperCase() === normalized;
+    chip.classList.toggle("active", matches);
+  });
+}
+
+symbolChips.forEach((chip) => {
+  chip.addEventListener("click", () => {
+    const symbol = chip.dataset.symbol;
+    if (!symbol) {
+      return;
+    }
+    setActiveSymbolChip(symbol);
+    marketDashboard?.setSymbol(symbol);
+  });
+});
+
+renderSampleSignals();
+renderDemoPositions();
+setActiveSymbolChip("BTC");
 
 async function fetchDefaultSignal() {
   try {
@@ -790,6 +1000,8 @@ resetButton.addEventListener("click", () => {
   textarea.value = cachedDefaultSignal || "";
   textarea.focus();
   resetFeatures();
+  setActiveSymbolChip("BTC");
+  marketDashboard?.setSymbol("BTC");
   statusMessage.className = "status-message";
   statusMessage.textContent = "Ready when you are.";
   setModePlaceholder();
@@ -797,26 +1009,23 @@ resetButton.addEventListener("click", () => {
   orderBlock.textContent = "(waiting)";
   exchangeBlock.textContent = "(waiting)";
   hintManager?.scheduleRefresh();
-  marketDashboard?.scheduleRefresh();
 });
 
 sampleButton.addEventListener("click", () => {
-  textarea.value =
-    "Long BTC 3 entry 60000 stop 58500 tp1 62500 tp2 63500 trailing stop 0.4% grid 3 150";
-  featureState.trailingStop.enabled = true;
-  featureState.trailingStop.value = 0.4;
-  featureState.trailingStop.unit = "percent";
-  featureState.grid.enabled = true;
-  featureState.grid.levels = 3;
-  featureState.grid.spacingValue = 150;
-  featureState.grid.unit = "absolute";
-  featureState.trailEntry.enabled = false;
-  applyStateToInputs();
-  updateAllFeatureUI();
-  updateSnippetPreview();
+  const sample = DEMO_SIGNALS[0];
+  if (!sample) {
+    textarea.focus();
+    return;
+  }
+  textarea.value = sample.text;
+  applyFeaturePreset(sample.preset);
+  setActiveSymbolChip(sample.symbol ?? "BTC");
+  if (sample.symbol) {
+    marketDashboard?.setSymbol(sample.symbol);
+  } else {
+    marketDashboard?.scheduleRefresh();
+  }
   textarea.focus();
-  hintManager?.scheduleRefresh();
-  marketDashboard?.scheduleRefresh();
 });
 
 initializeTheme();
@@ -843,6 +1052,10 @@ marketDashboard =
         initialSymbol: "BTC",
       })
     : null;
+
+if (marketDashboard) {
+  marketDashboard.preloadSymbols(["BTC", "ETH"]);
+}
 
 hintManager = new HintManager({
   textarea,
