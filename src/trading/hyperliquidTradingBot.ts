@@ -1,5 +1,17 @@
 import { ExchangeClient, HttpTransport, InfoClient, type OrderParameters } from "@nktkas/hyperliquid";
 
+import type { ExecutionMode } from "../storage/historyStore.js";
+import { ExecutionLogger, type ExecutionLogStatus } from "../telemetry/executionLogger.js";
+import { NotificationService } from "../telemetry/notificationService.js";
+import { RiskEngine } from "../risk/riskEngine.js";
+import type { RiskViolation } from "../risk/types.js";
+import {
+  computeNotionalUsd,
+  estimateLeverage,
+  estimateMaxRiskUsd,
+  resolveEntryPrice,
+} from "./executionMath.js";
+
 import {
   normalizeSymbol,
   parseTradeSignal,
@@ -19,6 +31,9 @@ export interface HyperliquidBotOptions {
   readonly infoClient?: InfoClient;
   readonly exchangeClient?: ExchangeClient;
   readonly transport?: HttpTransport;
+  readonly executionLogger?: ExecutionLogger;
+  readonly riskEngine?: RiskEngine;
+  readonly notificationService?: NotificationService;
 }
 
 type ExchangeOrderResponse = Awaited<ReturnType<ExchangeClient["order"]>>;
@@ -27,6 +42,10 @@ export interface ExecutionResult {
   readonly signal: TradeSignal;
   readonly payload: OrderParameters;
   readonly response: ExchangeOrderResponse;
+}
+
+export interface ExecutionContext {
+  readonly mode?: ExecutionMode;
 }
 
 interface AssetMeta {
@@ -86,6 +105,9 @@ export class HyperliquidTradingBot {
   private readonly exchange: ExchangeClient;
   private readonly slippageBps: number;
   private readonly cacheTtlMs: number;
+  private readonly logger?: ExecutionLogger;
+  private readonly riskEngine?: RiskEngine;
+  private readonly notifier?: NotificationService;
 
   private cache?: CachedAssets;
 
@@ -100,20 +122,122 @@ export class HyperliquidTradingBot {
       options.exchangeClient ?? new ExchangeClient({ wallet: options.privateKey as string, transport });
     this.slippageBps = options.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
     this.cacheTtlMs = options.metaRefreshIntervalMs ?? DEFAULT_CACHE_TTL_MS;
+    this.logger = options.executionLogger;
+    this.riskEngine = options.riskEngine;
+    this.notifier = options.notificationService;
   }
 
-  async executeSignalText(text: string): Promise<ExecutionResult> {
+  async executeSignalText(text: string, context?: ExecutionContext): Promise<ExecutionResult> {
     const signal = parseTradeSignal(text);
-    return this.executeSignal(signal);
+    return this.executeSignal(signal, context);
   }
 
-  async executeSignal(signal: TradeSignal): Promise<ExecutionResult> {
+  async executeSignal(signal: TradeSignal, context: ExecutionContext = {}): Promise<ExecutionResult> {
+    const mode: ExecutionMode = context.mode ?? "test";
     const cache = await this.ensureCache();
     const asset = this.resolveAsset(cache, signal.symbol);
     const entryContext = this.resolveEntryContext(signal, asset, cache);
     const payload = this.buildOrderPayload(signal, asset, entryContext);
-    const response = await this.exchange.order(payload);
+    const riskAssessment = await this.evaluateRisk(signal, payload, mode);
+    if (!riskAssessment.allowed) {
+      const reason = riskAssessment.violations.map((violation) => violation.message).join("; ")
+        || "Risk guard rejected execution";
+      await this.logger?.logFailure({
+        signal,
+        payload,
+        mode,
+        status: "blocked",
+        message: reason,
+        riskViolations: riskAssessment.violations,
+      });
+      await this.notifier?.notify({
+        type: "risk-guard",
+        severity: "critical",
+        message: `Risk guard blocked ${signal.side} ${signal.symbol}`,
+        details: {
+          reason,
+          violations: riskAssessment.violations,
+        },
+      });
+      throw new Error(reason);
+    }
+
+    let response: ExchangeOrderResponse;
+    try {
+      response = await this.exchange.order(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Exchange order failed";
+      await this.logger?.logFailure({
+        signal,
+        payload,
+        mode,
+        status: "error",
+        message,
+      });
+      await this.notifier?.notify({
+        type: "exchange-error",
+        severity: "critical",
+        message,
+        details: {
+          symbol: signal.symbol,
+          side: signal.side,
+        },
+      });
+      throw error;
+    }
+
+    const derived = deriveExecutionStatus(response);
+    if (derived.status === "error" || derived.status === "rejected") {
+      await this.notifier?.notify({
+        type: "exchange-error",
+        severity: derived.status === "error" ? "critical" : "warning",
+        message: derived.message ?? `Unexpected response for ${signal.symbol}`,
+        details: {
+          symbol: signal.symbol,
+          side: signal.side,
+          status: derived.status,
+        },
+      });
+    }
+
+    await this.logger?.logExecution({
+      signal,
+      payload,
+      response,
+      mode,
+      status: derived.status,
+      message: derived.message,
+      riskViolations: riskAssessment.violations,
+    });
+
     return { signal, payload, response };
+  }
+
+  private async evaluateRisk(
+    signal: TradeSignal,
+    payload: OrderParameters,
+    mode: ExecutionMode,
+  ): Promise<{ allowed: boolean; violations: readonly RiskViolation[] }> {
+    if (!this.riskEngine) {
+      return { allowed: true, violations: [] };
+    }
+    const entryPrice = resolveEntryPrice(signal, payload);
+    const notionalUsd = computeNotionalUsd(signal.size, entryPrice);
+    const estimatedRiskUsd = estimateMaxRiskUsd(signal, entryPrice);
+    const leverage = estimateLeverage(
+      notionalUsd,
+      this.riskEngine.getConfig().accountEquityUsd,
+    );
+    const assessment = await this.riskEngine.evaluate({
+      signal,
+      payload,
+      mode,
+      entryPriceUsd: entryPrice,
+      notionalUsd,
+      leverage,
+      estimatedRiskUsd,
+    });
+    return { allowed: assessment.allowed, violations: assessment.violations };
   }
 
   private async ensureCache(): Promise<CachedAssets> {
@@ -569,4 +693,35 @@ export class HyperliquidTradingBot {
     const str = value.toFixed(6);
     return str.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
   }
+}
+
+function deriveExecutionStatus(
+  response: ExchangeOrderResponse,
+): { status: ExecutionLogStatus; message?: string } {
+  const topLevelStatus = typeof (response as { status?: unknown }).status === "string"
+    ? ((response as { status: string }).status.toLowerCase())
+    : undefined;
+  const orderStatuses = Array.isArray((response as { data?: { statuses?: unknown } }).data?.statuses)
+    ? (response as { data: { statuses: Array<{ status?: string }> } }).data.statuses
+        .map((item) => (typeof item?.status === "string" ? item.status.toLowerCase() : undefined))
+        .filter((value): value is string => Boolean(value))
+    : [];
+
+  if (topLevelStatus && topLevelStatus !== "ok") {
+    return { status: "error", message: `Exchange responded with status ${topLevelStatus}` };
+  }
+
+  if (orderStatuses.some((status) => status.includes("reject") || status.includes("fail"))) {
+    return { status: "rejected", message: "One or more orders were rejected by the exchange" };
+  }
+
+  if (orderStatuses.some((status) => status.includes("partial"))) {
+    return { status: "partial", message: "Order partially filled" };
+  }
+
+  if (orderStatuses.some((status) => status.includes("error"))) {
+    return { status: "error", message: "Exchange returned error status for order" };
+  }
+
+  return { status: "fulfilled" };
 }

@@ -116,6 +116,50 @@
           </header>
           <ul class="order-list" id="order-list"></ul>
         </article>
+
+        <article class="card analytics" id="analytics-card">
+          <header class="card__header">
+            <div>
+              <h2>Analytics</h2>
+              <p class="caption">Динамика PnL, винрейт и использование плеча за последние операции.</p>
+            </div>
+            <button class="ghost" id="analytics-refresh" type="button">Обновить</button>
+          </header>
+          <div class="analytics__content">
+            <canvas id="pnl-chart" width="640" height="220" aria-label="PnL chart" role="img"></canvas>
+            <div class="analytics__stats" aria-live="polite">
+              <div class="analytics__stat">
+                <span class="analytics__stat-label">PnL (24ч)</span>
+                <strong id="stat-daily-pnl">—</strong>
+                <span class="analytics__stat-caption">Суммарный результат за сутки</span>
+              </div>
+              <div class="analytics__stat">
+                <span class="analytics__stat-label">Winrate</span>
+                <strong id="stat-winrate">—</strong>
+                <span class="analytics__stat-caption">Доля успешных исполнений</span>
+              </div>
+              <div class="analytics__stat">
+                <span class="analytics__stat-label">Леверидж</span>
+                <strong id="stat-leverage">—</strong>
+                <span class="analytics__stat-caption">Среднее и пиковое плечо</span>
+              </div>
+            </div>
+          </div>
+          <div class="analytics__history">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Время</th>
+                  <th scope="col">Символ</th>
+                  <th scope="col">Статус</th>
+                  <th scope="col">PnL</th>
+                  <th scope="col">Плечо</th>
+                </tr>
+              </thead>
+              <tbody id="analytics-history-body"></tbody>
+            </table>
+          </div>
+        </article>
       </section>
     </main>
 

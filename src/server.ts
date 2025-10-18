@@ -16,6 +16,7 @@ import {
   getSignalHistory,
   getTradeHistory,
 } from "./storage/historyStore.js";
+import type { ExecutionMode } from "./storage/historyStore.js";
 import {
   createPosition,
   deletePosition,
@@ -24,11 +25,14 @@ import {
   type PositionSide,
   updatePosition,
 } from "./storage/positionStore.js";
+import { getExecutionLogger, getRiskEngine } from "./runtime/serviceRegistry.js";
 
 type MutablePositionInput = { -readonly [K in keyof PositionInput]: PositionInput[K] };
 
 const app = express();
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
+const executionLogger = getExecutionLogger();
+const riskEngine = getRiskEngine();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -132,9 +136,8 @@ app.post("/api/execute", async (req: Request, res: Response) => {
 
     const signal = parseTradeSignal(text);
     const { bot, demoMode } = instantiateTradingBot();
-    const result = await bot.executeSignal(signal);
-
-    const mode = demoMode ? "demo" : "live";
+    const mode: ExecutionMode = demoMode ? "demo" : "live";
+    const result = await bot.executeSignal(signal, { mode });
 
     void appendSignalHistory({
       text,
@@ -173,6 +176,30 @@ app.post("/api/execute", async (req: Request, res: Response) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(400).json({ error: message });
+  }
+});
+
+app.get("/api/metrics", async (_req: Request, res: Response) => {
+  try {
+    const [metrics, risk] = await Promise.all([
+      executionLogger.getMetrics(),
+      riskEngine.describe(),
+    ]);
+    res.json({ metrics, risk });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load metrics";
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get("/api/history", async (req: Request, res: Response) => {
+  const limit = Number.parseInt(String(req.query.limit ?? "50"), 10);
+  try {
+    const history = await executionLogger.getHistory(Number.isFinite(limit) ? limit : undefined);
+    res.json({ items: history });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load execution history";
+    res.status(500).json({ error: message });
   }
 });
 

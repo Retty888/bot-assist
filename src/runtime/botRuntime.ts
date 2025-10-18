@@ -10,6 +10,7 @@ import {
   type HyperliquidBotOptions,
 } from "../trading/hyperliquidTradingBot.js";
 import { normalizeSymbol } from "../trading/tradeSignalParser.js";
+import { getExecutionLogger, getNotificationService, getRiskEngine } from "./serviceRegistry.js";
 
 export const DEFAULT_SIGNAL =
   "Long BTC size 2 entry 60420 stop 58650 tp1 63100 tp2 64250 30m risk medium trailing stop 0.6%";
@@ -566,8 +567,16 @@ export function resolveBotOptions(): RuntimeConfig {
 
 export function instantiateTradingBot(): { bot: HyperliquidTradingBot; demoMode: boolean } {
   const { options, demoMode } = resolveBotOptions();
+  const executionLogger = getExecutionLogger();
+  const riskEngine = getRiskEngine();
+  const notifier = getNotificationService();
   return {
-    bot: new HyperliquidTradingBot(options),
+    bot: new HyperliquidTradingBot({
+      ...options,
+      executionLogger,
+      riskEngine,
+      notificationService: notifier,
+    }),
     demoMode,
   };
 }

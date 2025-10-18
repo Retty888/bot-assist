@@ -1,5 +1,6 @@
 import { parseTradeSignal } from "./trading/tradeSignalParser.js";
 import { DEFAULT_SIGNAL, instantiateTradingBot } from "./runtime/botRuntime.js";
+import type { ExecutionMode } from "./storage/historyStore.js";
 
 function getSignalText(): string {
   const override = process.env.TRADING_SIGNAL?.trim();
@@ -25,7 +26,8 @@ async function main() {
     console.log("[bot] HYPERLIQUID_PRIVATE_KEY not provided; running in demo mode with mocked clients.");
   }
 
-  const result = await bot.executeSignal(parsed);
+  const mode: ExecutionMode = demoMode ? "demo" : "live";
+  const result = await bot.executeSignal(parsed, { mode });
   console.log("[bot] order payload:", JSON.stringify(result.payload, null, 2));
   console.log("[bot] exchange response:", JSON.stringify(result.response, null, 2));
 
