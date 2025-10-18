@@ -1,0 +1,16 @@
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 15s
+    additionalScrapeConfigs:
+      - job_name: bot-assist
+        metrics_path: /metrics
+        scrape_interval: 15s
+        static_configs:
+          - targets:
+              - bot-assist.bot-assist.svc.cluster.local:8080
+alertmanager:
+  alertmanagerSpec:
+    replicas: 2
+    routePrefix: /
+    externalUrl: https://alerts.hyperliquid.example
+    configSecret: alertmanager-slack-config
