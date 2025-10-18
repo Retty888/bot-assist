@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.resolve(__dirname, "../../data");
+const DATA_DIR = path.resolve(
+  process.env.BOT_DATA_DIR ?? path.join(__dirname, "../../data"),
+);
 
 export async function ensureDataDir(): Promise<string> {
   await fs.mkdir(DATA_DIR, { recursive: true });
