@@ -53,6 +53,21 @@ const symbolChips = Array.from(document.querySelectorAll(".symbol-chip"));
 const historyList = document.getElementById("history-list");
 const historyEmpty = document.getElementById("history-empty");
 const historyClearButton = document.getElementById("history-clear");
+const positionForm = document.getElementById("position-form");
+const positionSymbolInput = document.getElementById("position-symbol");
+const positionSideInput = document.getElementById("position-side");
+const positionSizeInput = document.getElementById("position-size");
+const positionEntryInput = document.getElementById("position-entry");
+const positionStopInput = document.getElementById("position-stop");
+const positionTakeProfitInput = document.getElementById("position-tp");
+const positionTagsInput = document.getElementById("position-tags");
+const positionNotesInput = document.getElementById("position-notes");
+const positionNotionalLabel = document.getElementById("position-notional");
+const positionRiskLabel = document.getElementById("position-risk");
+const positionSelect = document.getElementById("position-select");
+const positionNewButton = document.getElementById("position-new");
+const positionRefreshButton = document.getElementById("position-refresh");
+const positionDeleteButton = document.getElementById("position-delete");
 
 const UI_PLACEHOLDER = "—";
 
@@ -217,16 +232,12 @@ const DEMO_SIGNALS = [
   },
 ];
 
-const DEMO_POSITIONS = [
-  { symbol: "BTC-PERP", side: "Long", size: 1.8, entry: 60210, pnl: 485 },
-  { symbol: "ETH-PERP", side: "Short", size: 4.4, entry: 3542, pnl: -132 },
-  { symbol: "SOL-PERP", side: "Long", size: 280, entry: 145.3, pnl: 96 },
-];
-
 let hintManager = null;
 const REFRESH_STORAGE_KEY = "hl-market-refresh";
 const HISTORY_STORAGE_KEY = "hl-execution-history";
 let executionHistory = [];
+let positions = [];
+let activePositionId = null;
 const refreshState = loadRefreshState();
 
 function syncFeatureUI(feature) {
@@ -530,13 +541,17 @@ function renderSampleSignals() {
 }
 
 
-function renderDemoPositions() {
+function renderPositionsTable() {
   if (!demoPositionRows) {
     return;
   }
   demoPositionRows.innerHTML = "";
-  DEMO_POSITIONS.forEach((position) => {
+  positions.forEach((position) => {
     const row = document.createElement("tr");
+    row.dataset.positionId = position.id;
+    if (position.id === activePositionId) {
+      row.classList.add("active");
+    }
 
     const symbolCell = document.createElement("td");
     symbolCell.textContent = position.symbol;
@@ -551,18 +566,100 @@ function renderDemoPositions() {
     row.appendChild(sizeCell);
 
     const entryCell = document.createElement("td");
-    entryCell.textContent = Number.isFinite(position.entry)
-      ? priceFormatter.format(position.entry)
+    entryCell.textContent = Number.isFinite(position.entryPrice)
+      ? priceFormatter.format(position.entryPrice)
       : UI_PLACEHOLDER;
     row.appendChild(entryCell);
 
     const pnlCell = document.createElement("td");
-    pnlCell.textContent = formatUsd(position.pnl, { showSign: true });
-    pnlCell.dataset.positive = ((position.pnl ?? 0) >= 0).toString();
+    pnlCell.textContent = UI_PLACEHOLDER;
+    pnlCell.dataset.positive = "true";
     row.appendChild(pnlCell);
+
+    row.addEventListener("click", () => {
+      setActivePosition(position.id);
+    });
 
     demoPositionRows.appendChild(row);
   });
+}
+
+
+function renderPositionSelect() {
+  if (!positionSelect) {
+    return;
+  }
+  positionSelect.innerHTML = "";
+  positions.forEach((position) => {
+    const option = document.createElement("option");
+    option.value = position.id;
+    option.textContent = `${position.symbol} • ${position.side} • ${formatSize(position.size)}`;
+    if (position.id === activePositionId) {
+      option.selected = true;
+    }
+    positionSelect.appendChild(option);
+  });
+  if (!activePositionId && positions[0]) {
+    positionSelect.value = positions[0].id;
+  }
+}
+
+
+function renderPositions() {
+  renderPositionsTable();
+  renderPositionSelect();
+}
+
+
+function populatePositionForm(position) {
+  if (!positionForm) {
+    return;
+  }
+  positionSymbolInput.value = position.symbol ?? "";
+  positionSideInput.value = position.side ?? "long";
+  positionSizeInput.value = position.size?.toString() ?? "";
+  positionEntryInput.value = position.entryPrice?.toString() ?? "";
+  positionStopInput.value = position.stopLoss?.toString() ?? "";
+  positionTakeProfitInput.value = position.takeProfit?.toString() ?? "";
+  positionTagsInput.value = Array.isArray(position.tags) ? position.tags.join(", ") : "";
+  positionNotesInput.value = position.notes ?? "";
+  updatePositionMetrics();
+}
+
+
+function clearPositionForm() {
+  positionForm?.reset();
+  updatePositionMetrics();
+}
+
+
+function updatePositionMetrics() {
+  if (!positionNotionalLabel || !positionRiskLabel) {
+    return;
+  }
+  const size = Number(positionSizeInput?.value ?? "0");
+  const entry = Number(positionEntryInput?.value ?? "0");
+  if (size > 0 && entry > 0) {
+    const notional = size * entry;
+    const riskPerPercent = notional * 0.01;
+    positionNotionalLabel.textContent = `Notional: ${formatUsd(notional)}`;
+    positionRiskLabel.textContent = `±1% move: ${formatUsd(riskPerPercent)}`;
+  } else {
+    positionNotionalLabel.textContent = "Notional: —";
+    positionRiskLabel.textContent = "±1% move: —";
+  }
+}
+
+
+function setActivePosition(id) {
+  activePositionId = id ?? null;
+  const position = positions.find((item) => item.id === id);
+  if (position) {
+    populatePositionForm(position);
+    setActiveSymbolChip(position.symbol);
+    marketDashboard?.setSymbol(position.symbol);
+  }
+  renderPositions();
 }
 
 
@@ -633,6 +730,92 @@ function applyRefreshState(state, { persist = false } = {}) {
 }
 
 
+
+async function fetchPositionsFromServer() {
+  try {
+    const response = await fetch("/api/positions");
+    if (!response.ok) {
+      throw new Error(`Server responded with ${response.status}`);
+    }
+    const payload = await response.json();
+    positions = Array.isArray(payload?.items) ? payload.items : [];
+    renderPositions();
+    if (positions.length > 0) {
+      const defaultId = activePositionId ?? positions[0].id;
+      setActivePosition(defaultId);
+    } else {
+      clearPositionForm();
+    }
+  } catch (error) {
+    console.warn("Unable to load positions from server", error);
+    renderPositions();
+  }
+}
+
+
+function serializePositionForm() {
+  const tags = positionTagsInput.value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  return {
+    symbol: positionSymbolInput.value.trim().toUpperCase(),
+    side: positionSideInput.value,
+    size: Number(positionSizeInput.value),
+    entryPrice: Number(positionEntryInput.value),
+    stopLoss: positionStopInput.value ? Number(positionStopInput.value) : undefined,
+    takeProfit: positionTakeProfitInput.value ? Number(positionTakeProfitInput.value) : undefined,
+    tags,
+    notes: positionNotesInput.value.trim() || undefined,
+    source: "manual",
+  };
+}
+
+
+async function savePosition() {
+  if (!positionForm) {
+    return;
+  }
+  const payload = serializePositionForm();
+  const hasId = Boolean(activePositionId);
+  const url = hasId ? `/api/positions/${activePositionId}` : "/api/positions";
+  const method = hasId ? "PUT" : "POST";
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(typeof errorBody?.error === "string" ? errorBody.error : "Failed to save position");
+  }
+  const saved = await response.json();
+  await fetchPositionsFromServer();
+  if (saved?.id) {
+    setActivePosition(saved.id);
+  }
+}
+
+
+async function deletePositionOnServer() {
+  if (!activePositionId) {
+    return;
+  }
+  const response = await fetch(`/api/positions/${activePositionId}`, { method: "DELETE" });
+  if (!response.ok && response.status !== 404) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(typeof errorBody?.error === "string" ? errorBody.error : "Failed to delete position");
+  }
+  activePositionId = null;
+  await fetchPositionsFromServer();
+  if (positions[0]) {
+    setActivePosition(positions[0].id);
+  } else {
+    clearPositionForm();
+  }
+}
+
+
 function loadExecutionHistory() {
   try {
     const stored = window.localStorage.getItem(HISTORY_STORAGE_KEY);
@@ -659,6 +842,31 @@ function persistExecutionHistory() {
   }
 }
 
+
+
+
+async function syncHistoryFromServer(limit = 50) {
+  try {
+    const response = await fetch(`/api/history/signals?limit=${limit}`);
+    if (!response.ok) {
+      throw new Error(`Server responded with ${response.status}`);
+    }
+    const payload = await response.json();
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    executionHistory = items.map((item) => ({
+      id: item.id ?? crypto.randomUUID(),
+      text: item.text ?? "",
+      timestamp: item.timestamp ?? Date.now(),
+      symbol: item.parsedSymbol ?? "N/A",
+      mode: item.mode ?? "demo",
+    }));
+    persistExecutionHistory();
+    renderExecutionHistory();
+  } catch (error) {
+    console.warn("Unable to synchronize history from server", error);
+    renderExecutionHistory();
+  }
+}
 
 function renderExecutionHistory() {
   if (!historyList || !historyEmpty) {
@@ -702,6 +910,7 @@ function recordExecution(entry) {
   }
   persistExecutionHistory();
   renderExecutionHistory();
+  void syncHistoryFromServer(20);
 }
 
 
@@ -756,12 +965,59 @@ refreshNowButton?.addEventListener("click", () => {
   marketDashboard?.triggerRefresh();
 });
 
+
+positionForm?.addEventListener("input", () => {
+  updatePositionMetrics();
+});
+
+positionForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  savePosition().catch((error) => {
+    statusMessage.className = "status-message error";
+    statusMessage.textContent = `Position save failed: ${error instanceof Error ? error.message : error}`;
+  });
+});
+
+positionSelect?.addEventListener("change", () => {
+  const selectedId = positionSelect.value;
+  if (selectedId) {
+    setActivePosition(selectedId);
+  }
+});
+
+positionNewButton?.addEventListener("click", () => {
+  activePositionId = null;
+  clearPositionForm();
+  positionSelect.value = "";
+});
+
+positionRefreshButton?.addEventListener("click", () => {
+  fetchPositionsFromServer();
+});
+
+positionDeleteButton?.addEventListener("click", () => {
+  if (!activePositionId) {
+    return;
+  }
+  const shouldDelete = window.confirm("Delete selected position?");
+  if (!shouldDelete) {
+    return;
+  }
+  deletePositionOnServer().catch((error) => {
+    statusMessage.className = "status-message error";
+    statusMessage.textContent = `Position delete failed: ${error instanceof Error ? error.message : error}`;
+  });
+});
+
+
 loadExecutionHistory();
 renderExecutionHistory();
 applyRefreshState(refreshState);
+renderPositions();
 
+void fetchPositionsFromServer();
+void syncHistoryFromServer();
 renderSampleSignals();
-renderDemoPositions();
 setActiveSymbolChip("BTC");
 
 async function fetchDefaultSignal() {

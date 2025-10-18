@@ -605,6 +605,105 @@ main {
   font-size: 0.9rem;
 }
 
+.position-controls {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.position-select-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.position-select-row select {
+  min-width: 180px;
+  flex: 1 1 200px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  padding: 0.55rem 0.85rem;
+  font-size: 0.9rem;
+}
+
+.position-select-row button.danger {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: rgba(248, 113, 113, 0.85);
+}
+
+.position-select-row button.danger:hover,
+.position-select-row button.danger:focus-visible {
+  border-color: rgba(248, 113, 113, 0.9);
+  color: rgba(254, 226, 226, 0.95);
+}
+
+.position-form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  background: var(--input-panel-bg);
+}
+
+.form-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.form-grid label {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.form-grid textarea {
+  resize: vertical;
+}
+
+.form-grid input:focus,
+.form-grid select:focus,
+.form-grid textarea:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+}
+
+.form-grid .span-2 {
+  grid-column: span 2;
+}
+
+.position-form-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.position-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 .pill-list {
   display: flex;
   flex-wrap: wrap;
@@ -672,6 +771,11 @@ main {
 
 .position-table tbody tr:nth-child(odd) {
   background: rgba(15, 23, 42, 0.35);
+}
+
+.position-table tbody tr.active {
+  outline: 2px solid rgba(56, 189, 248, 0.65);
+  outline-offset: 2px;
 }
 
 .position-table td[data-positive="true"] {

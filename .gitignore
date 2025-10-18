@@ -12,6 +12,7 @@ scripts/vcpkg/buildtrees/
 logs/
 terminal.log*
 candle_data/
+data/
 
 # VS CMake out-of-source builds
 build_vs_dbg/

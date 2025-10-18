@@ -314,6 +314,52 @@ function generateSyntheticCandles(
   return candles;
 }
 
+async function fetchRealCandles(
+  infoClient: InfoClient,
+  assetName: string,
+  points: number,
+): Promise<CandleDatum[] | undefined> {
+  try {
+    const endTime = Date.now();
+    const intervalMinutes = 1;
+    const startTime = endTime - points * intervalMinutes * 60_000;
+    const response = await infoClient.candleSnapshot({
+      coin: assetName,
+      interval: "1m",
+      startTime,
+      endTime,
+    });
+    if (!Array.isArray(response) || response.length === 0) {
+      return undefined;
+    }
+    const candles = response
+      .map((item) => ({
+        time: Number(item.t) / 1000,
+        open: Number(item.o),
+        high: Number(item.h),
+        low: Number(item.l),
+        close: Number(item.c),
+        volume: Number(item.v),
+      }))
+      .filter((item) =>
+        Number.isFinite(item.time) &&
+        Number.isFinite(item.open) &&
+        Number.isFinite(item.high) &&
+        Number.isFinite(item.low) &&
+        Number.isFinite(item.close) &&
+        Number.isFinite(item.volume),
+      );
+    if (candles.length === 0) {
+      return undefined;
+    }
+    candles.sort((a, b) => a.time - b.time);
+    return candles.slice(-points);
+  } catch (error) {
+    console.warn(`Failed to fetch real candles for ${assetName}:`, error);
+    return undefined;
+  }
+}
+
 function buildVolumeDistribution(
   midPrice: number,
   volatilityPercent: number,
@@ -342,6 +388,40 @@ function buildVolumeDistribution(
   }
 
   return buckets;
+}
+
+function buildVolumeDistributionFromCandles(candles: CandleDatum[], bucketCount = 9): MarketVolumeBucket[] {
+  if (!Array.isArray(candles) || candles.length === 0) {
+    return [];
+  }
+  const closes = candles.map((candle) => candle.close);
+  const volumes = candles.map((candle) => candle.volume ?? 0);
+  const minPrice = Math.min(...closes);
+  const maxPrice = Math.max(...closes);
+  const range = maxPrice - minPrice || minPrice * 0.01;
+  const buckets: MarketVolumeBucket[] = [];
+  const step = range / bucketCount;
+  for (let index = 0; index < bucketCount; index += 1) {
+    const lower = minPrice + step * index;
+    const upper = index === bucketCount - 1 ? maxPrice + step : lower + step;
+    let volume = 0;
+    candles.forEach((candle, candleIndex) => {
+      const price = closes[candleIndex];
+      if (price >= lower && price < upper) {
+        volume += volumes[candleIndex] ?? 0;
+      }
+    });
+    buckets.push({
+      price: (lower + upper) / 2,
+      volume,
+      relativeIntensity: 1, // placeholder; will normalize below
+    });
+  }
+  const maxVolume = Math.max(...buckets.map((bucket) => bucket.volume), 1);
+  return buckets.map((bucket) => ({
+    ...bucket,
+    relativeIntensity: bucket.volume / maxVolume,
+  }));
 }
 
 export function ensureMarketClients(): { infoClient: InfoClient; demoMode: boolean } {
@@ -423,6 +503,20 @@ export async function getMarketDataSnapshot(symbol: string): Promise<MarketDataS
   const spreadBps = midPrice > 0 ? (spreadUsd / midPrice) * 10_000 : 0;
   const volatilityPercent = prevDayPx > 0 ? (Math.abs(midPrice - prevDayPx) / prevDayPx) * 100 : 0;
 
+  const { infoClient } = ensureMarketClients();
+  const candleCount = 90;
+  let candles = demoMode
+    ? generateSyntheticCandles(midPrice, volatilityPercent, dayBaseVolume, candleCount, normalized)
+    : await fetchRealCandles(infoClient, asset.name, candleCount);
+
+  if (!candles || candles.length === 0) {
+    candles = generateSyntheticCandles(midPrice, volatilityPercent, dayBaseVolume, candleCount, normalized);
+  }
+
+  const volumeDistribution = demoMode
+    ? buildVolumeDistribution(midPrice, volatilityPercent, dayBaseVolume, normalized)
+    : buildVolumeDistributionFromCandles(candles);
+
   return {
     symbol: asset.name,
     normalizedSymbol: normalized,
@@ -435,8 +529,8 @@ export async function getMarketDataSnapshot(symbol: string): Promise<MarketDataS
     dayBaseVolume,
     dayNotionalVolume,
     volatilityHint: buildVolatilityHint(volatilityPercent),
-    candles: generateSyntheticCandles(midPrice, volatilityPercent, dayBaseVolume, 60, normalized),
-    volumeDistribution: buildVolumeDistribution(midPrice, volatilityPercent, dayBaseVolume, normalized),
+    candles,
+    volumeDistribution,
     timestamp: Date.now(),
     demoMode,
   } satisfies MarketDataSnapshot;

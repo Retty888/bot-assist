@@ -145,6 +145,63 @@
           <article class="reference-block">
             <h3>Demo positions</h3>
             <p class="reference-lede">Mock exposure table used for sanity checks when tuning strategies.</p>
+            <div class="position-controls">
+              <label class="field-label" for="position-select">Saved positions</label>
+              <div class="position-select-row">
+                <select id="position-select" aria-label="Select saved position"></select>
+                <button type="button" id="position-new" class="ghost">New</button>
+                <button type="button" id="position-refresh" class="ghost">Refresh</button>
+                <button type="button" id="position-delete" class="ghost danger">Delete</button>
+              </div>
+            </div>
+
+            <form id="position-form" class="position-form" autocomplete="off">
+              <div class="form-grid">
+                <label>
+                  <span>Symbol</span>
+                  <input type="text" id="position-symbol" name="symbol" required maxlength="12" />
+                </label>
+                <label>
+                  <span>Side</span>
+                  <select id="position-side" name="side">
+                    <option value="long">Long</option>
+                    <option value="short">Short</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Size</span>
+                  <input type="number" id="position-size" name="size" step="0.001" min="0" required />
+                </label>
+                <label>
+                  <span>Entry price</span>
+                  <input type="number" id="position-entry" name="entryPrice" step="0.01" min="0" required />
+                </label>
+                <label>
+                  <span>Stop loss</span>
+                  <input type="number" id="position-stop" name="stopLoss" step="0.01" min="0" />
+                </label>
+                <label>
+                  <span>Take profit</span>
+                  <input type="number" id="position-tp" name="takeProfit" step="0.01" min="0" />
+                </label>
+                <label class="span-2">
+                  <span>Tags (comma separated)</span>
+                  <input type="text" id="position-tags" name="tags" />
+                </label>
+                <label class="span-2">
+                  <span>Notes</span>
+                  <textarea id="position-notes" name="notes" rows="2"></textarea>
+                </label>
+              </div>
+              <div class="position-form-footer">
+                <div class="position-metrics">
+                  <span id="position-notional">Notional: —</span>
+                  <span id="position-risk">Risk per % move: —</span>
+                </div>
+                <button type="submit" class="primary">Save position</button>
+              </div>
+            </form>
+
             <table class="position-table" aria-live="polite">
               <thead>
                 <tr>
