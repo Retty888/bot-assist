@@ -9,7 +9,11 @@ import {
   getMarketDataSnapshot,
   instantiateTradingBot,
 } from "./runtime/botRuntime.js";
-import { buildRecommendations } from "./insights/recommendationService.js";
+import {
+  buildRecommendations,
+  type MarketKpiMetrics,
+  type MarketSnapshot,
+} from "./insights/recommendationService.js";
 import {
   appendSignalHistory,
   appendTradeHistory,
@@ -24,6 +28,23 @@ import {
   type PositionSide,
   updatePosition,
 } from "./storage/positionStore.js";
+import {
+  defaultMarketDataProvider,
+  type MarketDataPoint,
+} from "./services/recommendationService/marketData.js";
+
+function toMarketSnapshot(point: MarketDataPoint | undefined): MarketSnapshot | undefined {
+  if (!point) {
+    return undefined;
+  }
+  return {
+    price: point.price,
+    atr: point.atr,
+    volatility: point.volatility,
+    liquidityScore: point.liquidityScore,
+    fundingRate: point.fundingRate,
+  } satisfies MarketSnapshot;
+}
 
 type MutablePositionInput = { -readonly [K in keyof PositionInput]: PositionInput[K] };
 
@@ -105,15 +126,49 @@ app.post("/api/market-data", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/hints", (req: Request, res: Response) => {
+app.post("/api/hints", async (req: Request, res: Response) => {
   const text = typeof req.body?.text === "string" ? req.body.text : "";
   if (!text.trim()) {
     res.status(400).json({ error: "Signal text is required" });
     return;
   }
 
+  let parsedSymbol: string | undefined;
   try {
-    const hints = buildRecommendations({ text, market: req.body?.market });
+    parsedSymbol = parseTradeSignal(text).symbol;
+  } catch {
+    parsedSymbol = undefined;
+  }
+
+  let providerSnapshot: MarketSnapshot | undefined;
+  let providerKpis: MarketKpiMetrics | undefined;
+  if (parsedSymbol) {
+    try {
+      const [snapshot, kpis] = await Promise.all([
+        req.body?.market ? Promise.resolve<MarketDataPoint | undefined>(undefined) : defaultMarketDataProvider.getSnapshot(parsedSymbol),
+        defaultMarketDataProvider.getKpis(parsedSymbol),
+      ]);
+      providerSnapshot = toMarketSnapshot(snapshot);
+      providerKpis = kpis
+        ? {
+            trendStrength: kpis.trendStrength,
+            drawdownPercent: kpis.drawdownPercent,
+            winRate: kpis.winRate,
+            liquidityScore: kpis.liquidityScore,
+            slippageBps: kpis.slippageBps,
+          }
+        : undefined;
+    } catch (error) {
+      console.warn("[hints] failed to load market KPIs", error);
+    }
+  }
+
+  try {
+    const hints = buildRecommendations({
+      text,
+      market: (req.body?.market as Partial<MarketSnapshot>) ?? providerSnapshot,
+      kpis: providerKpis,
+    });
     res.json(hints);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

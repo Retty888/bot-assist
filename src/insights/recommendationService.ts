@@ -42,16 +42,29 @@ export interface RecommendationContext {
   readonly atrPercent?: number;
   readonly volatility?: number;
   readonly fundingRate?: number;
+  readonly trendStrength?: number;
+  readonly winRate?: number;
+  readonly drawdownPercent?: number;
+  readonly slippageBps?: number;
 }
 
 export interface RecommendationRequest {
   readonly text: string;
   readonly market?: Partial<MarketSnapshot>;
+  readonly kpis?: MarketKpiMetrics;
 }
 
 export interface RecommendationResponse {
   readonly hints: readonly RecommendationHint[];
   readonly context: RecommendationContext;
+}
+
+export interface MarketKpiMetrics {
+  readonly trendStrength?: number;
+  readonly drawdownPercent?: number;
+  readonly winRate?: number;
+  readonly liquidityScore?: number;
+  readonly slippageBps?: number;
 }
 
 const MARKET_REFERENCE: Record<string, MarketSnapshot> = {
@@ -194,8 +207,10 @@ function buildPositionRiskHint(
   symbol: string | undefined,
   notionalUsd: number,
   snapshot: MarketSnapshot,
+  kpis?: MarketKpiMetrics,
 ): RecommendationHint | undefined {
-  const liquidityUsd = snapshot.liquidityScore * 1_000_000;
+  const liquidityScore = kpis?.liquidityScore ?? snapshot.liquidityScore;
+  const liquidityUsd = liquidityScore * 1_000_000;
   if (!(liquidityUsd > 0)) {
     return undefined;
   }
@@ -213,7 +228,7 @@ function buildPositionRiskHint(
     message: `Notional ≈ $${notionalUsd.toFixed(0)} consumes ${utilization.toFixed(1)}% of daily liquidity. Consider scaling down.`,
     badge,
     severity,
-    tooltip: `Liquidity score ${snapshot.liquidityScore.toFixed(0)}M vs. position $${notionalUsd.toFixed(0)}.`,
+    tooltip: `Liquidity score ${liquidityScore.toFixed(0)}M vs. position $${notionalUsd.toFixed(0)}.`,
   };
 }
 
@@ -235,6 +250,63 @@ function buildFundingHint(symbol: string | undefined, snapshot: MarketSnapshot):
     badge: "Funding",
     severity,
     tooltip: `Current funding ${(funding * 100).toFixed(2)}%.`,
+  };
+}
+
+function buildDrawdownHint(symbol: string | undefined, kpis: MarketKpiMetrics): RecommendationHint | undefined {
+  const drawdown = kpis.drawdownPercent;
+  if (!(drawdown && drawdown > 0)) {
+    return undefined;
+  }
+  if (drawdown < 12) {
+    return undefined;
+  }
+  const severity: HintSeverity = drawdown > 25 ? "danger" : "warning";
+  return {
+    id: `drawdown-${symbol ?? "unknown"}`,
+    slot: "global",
+    title: "Elevated drawdown regime",
+    message: `Recent drawdown near ${drawdown.toFixed(1)}% suggests reducing size or tightening risk.`,
+    badge: "Drawdown",
+    severity,
+    tooltip: "Derived from simulated market KPIs.",
+  };
+}
+
+function buildWinRateHint(symbol: string | undefined, kpis: MarketKpiMetrics): RecommendationHint | undefined {
+  const winRate = kpis.winRate;
+  if (winRate === undefined || Number.isNaN(winRate)) {
+    return undefined;
+  }
+  if (winRate >= 0.55) {
+    return undefined;
+  }
+  return {
+    id: `winrate-${symbol ?? "unknown"}`,
+    slot: "signal",
+    title: "Strategy underperforming",
+    message: `Win rate ${(winRate * 100).toFixed(1)}% is below target — consider scaling down.`,
+    badge: "Win%",
+    severity: "warning",
+  };
+}
+
+function buildSlippageHint(symbol: string | undefined, kpis: MarketKpiMetrics): RecommendationHint | undefined {
+  const slippageBps = kpis.slippageBps;
+  if (!(slippageBps && slippageBps > 0)) {
+    return undefined;
+  }
+  if (slippageBps < 90) {
+    return undefined;
+  }
+  const severity: HintSeverity = slippageBps >= 140 ? "danger" : "warning";
+  return {
+    id: `slippage-${symbol ?? "unknown"}`,
+    slot: "global",
+    title: "Slippage pressure",
+    message: `Estimated slippage ${slippageBps.toFixed(0)}bps — prefer limit entries or thinner size.`,
+    badge: "Slippage",
+    severity,
   };
 }
 
@@ -271,6 +343,7 @@ export function buildRecommendations(request: RecommendationRequest): Recommenda
 
   const symbol = parsed?.symbol ?? inferSymbolFromText(text);
   const market = resolveMarketSnapshot(symbol, request.market);
+  const kpis = request.kpis;
 
   const notionalUsd = calculateNotional(parsed, market);
 
@@ -283,18 +356,24 @@ export function buildRecommendations(request: RecommendationRequest): Recommenda
     volatility: market?.volatility,
     fundingRate: market?.fundingRate,
     notionalUsd: notionalUsd ? roundTo(notionalUsd, 2) : undefined,
+    trendStrength: kpis?.trendStrength,
+    winRate: kpis?.winRate,
+    drawdownPercent: kpis?.drawdownPercent,
+    slippageBps: kpis?.slippageBps,
   };
 
   if (market) {
     hints.push(buildTrailingStopHint(symbol, market));
 
-    if (market.volatility >= 5.5) {
+    const preferTrailing = (kpis?.trendStrength ?? 0) >= 0.65 || market.volatility >= 5.5;
+
+    if (preferTrailing) {
       hints.push(buildTrailingEntryHint(symbol, market));
     } else {
       hints.push(buildGridHint(symbol, market));
     }
 
-    const positionHint = notionalUsd ? buildPositionRiskHint(symbol, notionalUsd, market) : undefined;
+    const positionHint = notionalUsd ? buildPositionRiskHint(symbol, notionalUsd, market, kpis) : undefined;
     if (positionHint) {
       hints.push(positionHint);
     }
@@ -302,6 +381,23 @@ export function buildRecommendations(request: RecommendationRequest): Recommenda
     const fundingHint = buildFundingHint(symbol, market);
     if (fundingHint) {
       hints.push(fundingHint);
+    }
+  }
+
+  if (kpis) {
+    const drawdownHint = buildDrawdownHint(symbol, kpis);
+    if (drawdownHint) {
+      hints.push(drawdownHint);
+    }
+
+    const winRateHint = buildWinRateHint(symbol, kpis);
+    if (winRateHint) {
+      hints.push(winRateHint);
+    }
+
+    const slippageHint = buildSlippageHint(symbol, kpis);
+    if (slippageHint) {
+      hints.push(slippageHint);
     }
   }
 

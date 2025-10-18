@@ -65,10 +65,7 @@ export function adviseSignal(signal: TradeSignal, options: SignalAdviceOptions =
     notes.push(`Volatility bias ${volatilityBias.toFixed(2)} applied to leverage`);
   }
 
-  const providedMin = sanitizeLeverageBound(options.minLeverage, 1);
-  const providedMax = sanitizeLeverageBound(options.maxLeverage, 25);
-  const minLeverage = Math.min(providedMin, providedMax);
-  const maxLeverage = Math.max(providedMin, providedMax);
+  const { minLeverage, maxLeverage } = resolveLeverageBounds(options);
   let recommendedLeverage = clamp(leverage, minLeverage, maxLeverage);
 
   if (recommendedLeverage !== leverage) {
@@ -80,9 +77,11 @@ export function adviseSignal(signal: TradeSignal, options: SignalAdviceOptions =
   recommendedLeverage = Math.round(recommendedLeverage * 100) / 100;
 
   let execution: ExecutionType = signal.execution;
-  if (signal.riskLabel === "extreme" && execution !== "limit") {
+  if (signal.riskLabel === "extreme") {
+    if (execution !== "limit") {
+      notes.push("Extreme risk profile prefers limit execution");
+    }
     execution = "limit";
-    notes.push("Extreme risk profile prefers limit execution");
   } else if (dominantMinutes !== undefined && dominantMinutes <= 15 && execution !== "market") {
     execution = "market";
     notes.push("Fast timeframe detected; switching to market execution");
@@ -164,7 +163,7 @@ function deriveEntryStrategy(
   return signal.entryStrategy;
 }
 
-function computeTimeframeMultiplier(minutes: number): number {
+export function computeTimeframeMultiplier(minutes: number): number {
   if (minutes <= 5) {
     return 0.8;
   }
@@ -180,7 +179,7 @@ function computeTimeframeMultiplier(minutes: number): number {
   return 1.2;
 }
 
-function deriveDominantTimeframe(hints: readonly string[]): number | undefined {
+export function deriveDominantTimeframe(hints: readonly string[]): number | undefined {
   let best: number | undefined;
   for (const hint of hints) {
     const minutes = timeframeHintToMinutes(hint);
@@ -194,7 +193,7 @@ function deriveDominantTimeframe(hints: readonly string[]): number | undefined {
   return best;
 }
 
-function timeframeHintToMinutes(hint: string): number | undefined {
+export function timeframeHintToMinutes(hint: string): number | undefined {
   const normalized = hint.trim().toLowerCase();
   if (!normalized) {
     return undefined;
@@ -246,4 +245,15 @@ function sanitizeLeverageBound(bound: number | undefined, fallback: number): num
     return bound as number;
   }
   return fallback;
+}
+
+export function resolveLeverageBounds(
+  options: SignalAdviceOptions = {},
+): { readonly minLeverage: number; readonly maxLeverage: number } {
+  const providedMin = sanitizeLeverageBound(options.minLeverage, 1);
+  const providedMax = sanitizeLeverageBound(options.maxLeverage, 25);
+  return {
+    minLeverage: Math.min(providedMin, providedMax),
+    maxLeverage: Math.max(providedMin, providedMax),
+  } as const;
 }
