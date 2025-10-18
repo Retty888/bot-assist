@@ -1,4 +1,8 @@
+import { initializeMarketDashboard } from "./charts.js";
+
 const MODE_PLACEHOLDER = "Mode: —";
+
+const body = document.body;
 
 const form = document.getElementById("signal-form");
 const textarea = document.getElementById("signal");
@@ -13,6 +17,22 @@ const autoSnippet = document.getElementById("auto-snippet");
 const autoError = document.getElementById("auto-error");
 const hintStatus = document.getElementById("hint-status");
 const hintSummary = document.getElementById("hint-summary");
+const themeToggle = document.getElementById("theme-toggle");
+const themeToggleLabel = themeToggle?.querySelector(".theme-toggle__label");
+const themeToggleIcon = themeToggle?.querySelector(".theme-toggle__icon");
+
+const marketSymbol = document.getElementById("market-symbol");
+const marketMid = document.getElementById("market-mid");
+const marketSpread = document.getElementById("market-spread");
+const marketVolatility = document.getElementById("market-volatility");
+const marketFunding = document.getElementById("market-funding");
+const marketVolume = document.getElementById("market-volume");
+const marketUpdated = document.getElementById("market-updated");
+const marketModeBadge = document.getElementById("market-mode-badge");
+const priceChartElement = document.getElementById("price-chart");
+const heatmapElement = document.getElementById("volume-heatmap");
+const layerSummaryElement = document.getElementById("layer-summary");
+const volatilityHintElement = document.getElementById("volatility-hint");
 const hintContextElements = {
   symbol: document.getElementById("hint-symbol"),
   price: document.getElementById("hint-price"),
@@ -55,6 +75,69 @@ const trailEntryStepValueInput = document.getElementById("trail-entry-step-value
 const trailEntryStepUnitSelect = document.getElementById("trail-entry-step-unit");
 
 let cachedDefaultSignal = "";
+let marketDashboard = null;
+
+const THEME_STORAGE_KEY = "hl-theme";
+const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+let manualTheme = null;
+
+function resolveTheme(value) {
+  return value === "light" ? "light" : "dark";
+}
+
+function updateThemeToggle(theme) {
+  if (!themeToggle || !themeToggleLabel || !themeToggleIcon) {
+    return;
+  }
+  if (theme === "light") {
+    themeToggleLabel.textContent = "Light";
+    themeToggleIcon.textContent = "☀️";
+  } else {
+    themeToggleLabel.textContent = "Dark";
+    themeToggleIcon.textContent = "🌙";
+  }
+}
+
+function applyTheme(theme, persist = false) {
+  const resolved = resolveTheme(theme);
+  body.dataset.theme = resolved;
+  updateThemeToggle(resolved);
+  if (persist) {
+    manualTheme = resolved;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, resolved);
+    } catch (error) {
+      console.warn("Unable to persist theme preference", error);
+    }
+  }
+  marketDashboard?.setTheme(resolved);
+}
+
+function initializeTheme() {
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored) {
+      manualTheme = resolveTheme(stored);
+    }
+  } catch (error) {
+    console.warn("Unable to read stored theme", error);
+  }
+
+  const initialTheme = manualTheme ?? resolveTheme(prefersDark.matches ? "dark" : "light");
+  applyTheme(initialTheme, Boolean(manualTheme));
+
+  prefersDark.addEventListener("change", (event) => {
+    if (manualTheme) {
+      return;
+    }
+    applyTheme(event.matches ? "dark" : "light");
+  });
+
+  themeToggle?.addEventListener("click", () => {
+    const next = body.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(next, true);
+  });
+}
 
 function createDefaultFeatureState() {
   return {
@@ -299,6 +382,7 @@ async function fetchDefaultSignal() {
       cachedDefaultSignal = payload.defaultSignal;
       textarea.value = payload.defaultSignal;
       resetFeatures();
+      marketDashboard?.scheduleRefresh();
     }
   } catch (error) {
     console.error("Failed to load default signal", error);
@@ -646,6 +730,7 @@ trailEntryStepUnitSelect.addEventListener("change", () => {
 
 textarea.addEventListener("input", () => {
   hintManager?.scheduleRefresh();
+  marketDashboard?.scheduleRefresh();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -667,6 +752,7 @@ form.addEventListener("submit", async (event) => {
 
   const combinedSignal = appendFeatureSegments(rawSignal, segments);
   textarea.value = combinedSignal;
+  marketDashboard?.scheduleRefresh();
 
   statusMessage.className = "status-message";
   statusMessage.textContent = "Executing signal...";
@@ -711,6 +797,7 @@ resetButton.addEventListener("click", () => {
   orderBlock.textContent = "(waiting)";
   exchangeBlock.textContent = "(waiting)";
   hintManager?.scheduleRefresh();
+  marketDashboard?.scheduleRefresh();
 });
 
 sampleButton.addEventListener("click", () => {
@@ -729,7 +816,33 @@ sampleButton.addEventListener("click", () => {
   updateSnippetPreview();
   textarea.focus();
   hintManager?.scheduleRefresh();
+  marketDashboard?.scheduleRefresh();
 });
+
+initializeTheme();
+
+marketDashboard =
+  priceChartElement && heatmapElement && layerSummaryElement
+    ? initializeMarketDashboard({
+        chartElement: priceChartElement,
+        heatmapElement,
+        layerListElement: layerSummaryElement,
+        volatilityHintElement,
+        signalProvider: () => textarea.value,
+        metrics: {
+          symbol: marketSymbol,
+          mid: marketMid,
+          spread: marketSpread,
+          volatility: marketVolatility,
+          funding: marketFunding,
+          volume: marketVolume,
+          updated: marketUpdated,
+          modeBadge: marketModeBadge,
+        },
+        theme: body.dataset.theme,
+        initialSymbol: "BTC",
+      })
+    : null;
 
 hintManager = new HintManager({
   textarea,
