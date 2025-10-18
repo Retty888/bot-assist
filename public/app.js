@@ -42,10 +42,17 @@ const hintContextElements = {
   notional: document.getElementById("hint-notional"),
   funding: document.getElementById("hint-funding"),
 };
+const autoRefreshToggle = document.getElementById("auto-refresh-toggle");
+const autoRefreshIntervalInput = document.getElementById("auto-refresh-interval");
+const autoRefreshLabel = document.getElementById("auto-refresh-label");
+const refreshNowButton = document.getElementById("refresh-now");
 
 const sampleSignalList = document.getElementById("sample-signal-list");
 const demoPositionRows = document.getElementById("demo-position-rows");
 const symbolChips = Array.from(document.querySelectorAll(".symbol-chip"));
+const historyList = document.getElementById("history-list");
+const historyEmpty = document.getElementById("history-empty");
+const historyClearButton = document.getElementById("history-clear");
 
 const UI_PLACEHOLDER = "—";
 
@@ -179,7 +186,7 @@ const DEMO_SIGNALS = [
     description: "Grid ×3 @ $120 + trailing stop 0.4%",
     symbol: "BTC",
     text:
-      "Long BTC 3 entry 60000 stop 58500 tp1 62500 tp2 63500 trailing stop 0.4% grid 3 120",
+      "Long BTC 3 entry 60000 stop 58500 tp1 62500 tp2 63500 trailing stop 0.4% grid 3 120 15m risk high",
     preset: {
       trailingStop: { value: 0.4, unit: "percent" },
       grid: { levels: 3, spacingValue: 120, unit: "absolute" },
@@ -191,7 +198,7 @@ const DEMO_SIGNALS = [
     description: "Trailing entries ×4 @ 0.35% + stop 0.6%",
     symbol: "ETH",
     text:
-      "Short ETH size 4 entry 3520 stop 3650 tp1 3300 tp2 3200 trail entry 4 0.35% trailing stop 0.6%",
+      "Short ETH size 4 entry 3520 stop 3650 tp1 3300 tp2 3200 trail entry 4 0.35% trailing stop 0.6% scalp risk extreme",
     preset: {
       trailingStop: { value: 0.6, unit: "percent" },
       trailEntry: { levels: 4, stepValue: 0.35, unit: "percent" },
@@ -203,7 +210,7 @@ const DEMO_SIGNALS = [
     description: "Single entry + trailing stop 1.0%",
     symbol: "BTC",
     text:
-      "Long BTC 1.5 entry 59850 stop 58200 tp1 62400 tp2 63800 trailing stop 1% market",
+      "Long BTC 1.5 entry 59850 stop 58200 tp1 62400 tp2 63800 trailing stop 1% market swing risk medium",
     preset: {
       trailingStop: { value: 1, unit: "percent" },
     },
@@ -217,6 +224,10 @@ const DEMO_POSITIONS = [
 ];
 
 let hintManager = null;
+const REFRESH_STORAGE_KEY = "hl-market-refresh";
+const HISTORY_STORAGE_KEY = "hl-execution-history";
+let executionHistory = [];
+const refreshState = loadRefreshState();
 
 function syncFeatureUI(feature) {
   const state = featureState[feature];
@@ -566,6 +577,140 @@ function setActiveSymbolChip(symbol) {
   });
 }
 
+
+function updateRefreshLabelDisplay(seconds) {
+  if (autoRefreshLabel) {
+    autoRefreshLabel.textContent = `${seconds}s`;
+  }
+}
+
+
+function loadRefreshState() {
+  try {
+    const stored = window.localStorage.getItem(REFRESH_STORAGE_KEY);
+    if (!stored) {
+      return { enabled: true, interval: 20 };
+    }
+    const parsed = JSON.parse(stored);
+    const enabled = typeof parsed?.enabled === "boolean" ? parsed.enabled : true;
+    const interval = Number.isFinite(parsed?.interval) ? Math.max(5, Math.min(60, parsed.interval)) : 20;
+    return { enabled, interval };
+  } catch (error) {
+    console.warn("Unable to read refresh settings", error);
+    return { enabled: true, interval: 20 };
+  }
+}
+
+
+function persistRefreshState(state) {
+  try {
+    window.localStorage.setItem(REFRESH_STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.warn("Unable to persist refresh settings", error);
+  }
+}
+
+
+function applyRefreshState(state, { persist = false } = {}) {
+  const enabled = state.enabled ?? true;
+  const interval = Math.max(5, Math.min(60, Math.round(state.interval ?? 20)));
+  if (autoRefreshToggle) {
+    autoRefreshToggle.checked = enabled;
+  }
+  if (autoRefreshIntervalInput) {
+    autoRefreshIntervalInput.value = interval.toString();
+    autoRefreshIntervalInput.disabled = !enabled;
+  }
+  if (refreshNowButton) {
+    refreshNowButton.disabled = !enabled;
+    refreshNowButton.classList.toggle("disabled", !enabled);
+  }
+  updateRefreshLabelDisplay(interval);
+  marketDashboard?.setRefreshOptions({ enabled, intervalMs: interval * 1000 });
+  if (persist) {
+    persistRefreshState({ enabled, interval });
+  }
+}
+
+
+function loadExecutionHistory() {
+  try {
+    const stored = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!stored) {
+      executionHistory = [];
+      return;
+    }
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed)) {
+      executionHistory = parsed.slice(0, 20);
+    }
+  } catch (error) {
+    console.warn("Unable to read execution history", error);
+    executionHistory = [];
+  }
+}
+
+
+function persistExecutionHistory() {
+  try {
+    window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(executionHistory));
+  } catch (error) {
+    console.warn("Unable to persist execution history", error);
+  }
+}
+
+
+function renderExecutionHistory() {
+  if (!historyList || !historyEmpty) {
+    return;
+  }
+  historyList.innerHTML = "";
+  if (executionHistory.length === 0) {
+    historyEmpty.hidden = false;
+    historyList.hidden = true;
+    return;
+  }
+  historyEmpty.hidden = true;
+  historyList.hidden = false;
+
+  executionHistory.forEach((entry) => {
+    const item = document.createElement("li");
+    const meta = document.createElement("div");
+    meta.className = "history-entry__meta";
+    const timestamp = document.createElement("span");
+    timestamp.textContent = new Date(entry.timestamp).toLocaleTimeString();
+    const symbol = document.createElement("span");
+    symbol.textContent = entry.symbol ?? "N/A";
+    const mode = document.createElement("span");
+    mode.textContent = entry.mode ?? "demo";
+    meta.append(timestamp, symbol, mode);
+
+    const text = document.createElement("p");
+    text.className = "history-entry__text";
+    text.textContent = entry.text;
+
+    item.append(meta, text);
+    historyList.appendChild(item);
+  });
+}
+
+
+function recordExecution(entry) {
+  executionHistory.unshift(entry);
+  if (executionHistory.length > 20) {
+    executionHistory.length = 20;
+  }
+  persistExecutionHistory();
+  renderExecutionHistory();
+}
+
+
+function clearExecutionHistory() {
+  executionHistory = [];
+  persistExecutionHistory();
+  renderExecutionHistory();
+}
+
 symbolChips.forEach((chip) => {
   chip.addEventListener("click", () => {
     const symbol = chip.dataset.symbol;
@@ -576,6 +721,44 @@ symbolChips.forEach((chip) => {
     marketDashboard?.setSymbol(symbol);
   });
 });
+
+historyClearButton?.addEventListener("click", () => {
+  clearExecutionHistory();
+});
+
+if (historyList) {
+  historyList.hidden = true;
+}
+
+if (historyEmpty) {
+  historyEmpty.hidden = false;
+}
+
+autoRefreshToggle?.addEventListener("change", () => {
+  refreshState.enabled = autoRefreshToggle.checked;
+  applyRefreshState(refreshState, { persist: true });
+});
+
+autoRefreshIntervalInput?.addEventListener("input", () => {
+  const seconds = Number.parseInt(autoRefreshIntervalInput.value, 10) || refreshState.interval;
+  updateRefreshLabelDisplay(seconds);
+});
+
+autoRefreshIntervalInput?.addEventListener("change", () => {
+  const seconds = Number.parseInt(autoRefreshIntervalInput.value, 10);
+  if (Number.isFinite(seconds)) {
+    refreshState.interval = Math.max(5, Math.min(60, seconds));
+    applyRefreshState(refreshState, { persist: true });
+  }
+});
+
+refreshNowButton?.addEventListener("click", () => {
+  marketDashboard?.triggerRefresh();
+});
+
+loadExecutionHistory();
+renderExecutionHistory();
+applyRefreshState(refreshState);
 
 renderSampleSignals();
 renderDemoPositions();
@@ -983,6 +1166,12 @@ form.addEventListener("submit", async (event) => {
     parsedBlock.textContent = JSON.stringify(parsed, null, 2);
     orderBlock.textContent = JSON.stringify(orderPayload, null, 2);
     exchangeBlock.textContent = JSON.stringify(response, null, 2);
+    recordExecution({
+      text: combinedSignal,
+      timestamp: Date.now(),
+      symbol: parsed.symbol ?? "N/A",
+      mode: demoMode ? "demo" : "live",
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     statusMessage.className = "status-message error";
@@ -1055,6 +1244,7 @@ marketDashboard =
 
 if (marketDashboard) {
   marketDashboard.preloadSymbols(["BTC", "ETH"]);
+  applyRefreshState(refreshState, { persist: false });
 }
 
 hintManager = new HintManager({

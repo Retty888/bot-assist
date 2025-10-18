@@ -100,6 +100,8 @@ export function initializeMarketDashboard(options) {
   let priceLines = [];
   let cachedLayers = null;
   let destroyed = false;
+  let autoRefreshEnabled = options?.autoRefresh ?? true;
+  let refreshIntervalMs = options?.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
   const snapshotCache = new Map();
 
   const chart = chartLibrary.createChart(chartElement, {
@@ -312,20 +314,23 @@ function applySnapshot(snapshot) {
       const snapshot = await fetchSymbolSnapshot(targetSymbol);
       currentSymbol = (snapshot.normalizedSymbol ?? targetSymbol).toUpperCase();
       applySnapshot(snapshot);
-      scheduleRefresh(REFRESH_INTERVAL_MS);
+      scheduleRefresh(refreshIntervalMs);
     } catch (error) {
       console.error("Failed to load market data", error);
       if (metrics.updated) {
         metrics.updated.textContent = "error";
       }
-      scheduleRefresh(immediate ? RETRY_INTERVAL_MS : Math.min(RETRY_INTERVAL_MS, REFRESH_INTERVAL_MS));
+      if (autoRefreshEnabled) {
+        const retryDelay = immediate ? RETRY_INTERVAL_MS : Math.min(RETRY_INTERVAL_MS, refreshIntervalMs);
+        scheduleRefresh(retryDelay);
+      }
     } finally {
       pending = false;
     }
   }
 
-  function scheduleRefresh(delay) {
-    if (destroyed) {
+  function scheduleRefresh(delay = refreshIntervalMs) {
+    if (destroyed || !autoRefreshEnabled) {
       return;
     }
     if (refreshHandle) {
@@ -380,6 +385,21 @@ function applySnapshot(snapshot) {
           console.warn("Failed to preload market snapshot", normalized, error);
         }
       }
+    },
+    setRefreshOptions({ enabled, intervalMs }) {
+      autoRefreshEnabled = enabled ?? autoRefreshEnabled;
+      if (Number.isFinite(intervalMs) && intervalMs >= 3000) {
+        refreshIntervalMs = intervalMs;
+      }
+      if (autoRefreshEnabled) {
+        scheduleRefresh(refreshIntervalMs);
+      } else if (refreshHandle) {
+        window.clearTimeout(refreshHandle);
+        refreshHandle = null;
+      }
+    },
+    triggerRefresh(symbol) {
+      fetchSnapshot(true, symbol);
     },
     destroy() {
       destroyed = true;

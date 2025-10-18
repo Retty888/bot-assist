@@ -83,6 +83,27 @@
           </div>
         </dl>
 
+        <div class="market-controls">
+          <label class="switch">
+            <input type="checkbox" id="auto-refresh-toggle" checked />
+            <span>Auto refresh</span>
+          </label>
+          <div class="interval-control">
+            <label for="auto-refresh-interval">Interval</label>
+            <input
+              type="range"
+              id="auto-refresh-interval"
+              min="5"
+              max="60"
+              step="5"
+              value="20"
+              aria-label="Auto refresh interval in seconds"
+            />
+            <span id="auto-refresh-label">20s</span>
+          </div>
+          <button type="button" id="refresh-now" class="ghost">Refresh now</button>
+        </div>
+
         <div class="chart-grid">
           <div class="chart-panel">
             <header class="chart-panel__header">
@@ -301,6 +322,15 @@
           <summary>Exchange response</summary>
           <pre id="exchange-response">(waiting)</pre>
         </details>
+      </section>
+
+      <section class="card history" id="history-card">
+        <header class="history-header">
+          <h2>Execution tracking</h2>
+          <button type="button" id="history-clear" class="ghost">Clear history</button>
+        </header>
+        <p id="history-empty" class="history-empty">No executions yet — run a signal to populate the log.</p>
+        <ol id="history-list" class="history-list" aria-live="polite"></ol>
       </section>
 
       <footer class="footer">

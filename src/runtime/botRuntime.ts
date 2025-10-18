@@ -11,7 +11,8 @@ import {
 } from "../trading/hyperliquidTradingBot.js";
 import { normalizeSymbol } from "../trading/tradeSignalParser.js";
 
-export const DEFAULT_SIGNAL = "Long BTC 2 stop 58000 tp1 62000 tp2 63000 market";
+export const DEFAULT_SIGNAL =
+  "Long BTC size 2 entry 60420 stop 58650 tp1 63100 tp2 64250 30m risk medium trailing stop 0.6%";
 
 type MetaAndAssetCtxsTuple = Awaited<ReturnType<InfoClient["metaAndAssetCtxs"]>>;
 type MetaResponse = MetaAndAssetCtxsTuple[0];
@@ -19,12 +20,68 @@ type AssetContexts = MetaAndAssetCtxsTuple[1];
 
 type NumericLike = string | number | null | undefined;
 
+interface DemoProfile {
+  readonly basePrice: number;
+  readonly volatility: number;
+  readonly dayBaseVolume: number;
+  readonly funding: number;
+  readonly openInterest: number;
+  readonly premium: number;
+  readonly periodMinutes: number;
+  readonly phase: number;
+}
+
+const DEMO_PROFILES: Record<string, DemoProfile> = {
+  BTC: {
+    basePrice: 60850,
+    volatility: 0.022,
+    dayBaseVolume: 34_500,
+    funding: 0.00018,
+    openInterest: 1_950_000_000,
+    premium: 0.0006,
+    periodMinutes: 45,
+    phase: 0,
+  },
+  ETH: {
+    basePrice: 3525,
+    volatility: 0.028,
+    dayBaseVolume: 215_000,
+    funding: 0.00023,
+    openInterest: 740_000_000,
+    premium: 0.0009,
+    periodMinutes: 60,
+    phase: Math.PI / 3,
+  },
+  SOL: {
+    basePrice: 148.5,
+    volatility: 0.035,
+    dayBaseVolume: 5_800_000,
+    funding: 0.00032,
+    openInterest: 185_000_000,
+    premium: 0.0012,
+    periodMinutes: 35,
+    phase: Math.PI / 1.7,
+  },
+};
+
 const demoMeta: MetaResponse = {
   universe: [
     {
       name: "BTC",
       szDecimals: 3,
+      maxLeverage: 125,
+      marginTableId: 0,
+    },
+    {
+      name: "ETH",
+      szDecimals: 3,
       maxLeverage: 100,
+      marginTableId: 0,
+    },
+    {
+      name: "SOL",
+      szDecimals: 2,
+      maxLeverage: 60,
       marginTableId: 0,
     },
   ],
@@ -40,26 +97,68 @@ const demoMeta: MetaResponse = {
   collateralToken: 0,
 };
 
-const demoContexts: AssetContexts = [
-  {
-    prevDayPx: "60000",
-    dayNtlVlm: "0",
-    markPx: "60500",
-    midPx: "60500",
-    funding: "0",
-    openInterest: "0",
-    premium: "0",
-    oraclePx: "60500",
-    impactPxs: null,
-    dayBaseVlm: "0",
-  },
-];
+function getDemoProfile(symbol: string): DemoProfile {
+  const normalized = symbol.toUpperCase();
+  return DEMO_PROFILES[normalized] ?? DEMO_PROFILES.BTC;
+}
+
+function formatNumeric(value: number, fractionDigits = 8): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  if (Math.abs(value) >= 1_000_000) {
+    return Math.round(value).toString();
+  }
+  return value
+    .toFixed(fractionDigits)
+    .replace(/\.0+$/, "")
+    .replace(/(\.\d*?)0+$/, "$1");
+}
+
+function buildDemoContexts(meta: MetaResponse): AssetContexts {
+  const nowMs = Date.now();
+  const contexts: AssetContexts = [];
+
+  meta.universe.forEach((asset, index) => {
+    const profile = getDemoProfile(asset.name);
+    const periodSeconds = profile.periodMinutes * 60;
+    const basePrice = profile.basePrice;
+    const phase = profile.phase + index * 0.45;
+    const timeFactor = (nowMs / 1000) / periodSeconds;
+    const wave = Math.sin(timeFactor + phase);
+    const drift = Math.cos(timeFactor * 1.4 + phase * 0.75);
+
+    const midPrice = basePrice * (1 + wave * profile.volatility);
+    const markPrice = midPrice * (1 + drift * profile.volatility * 0.05);
+    const prevDayPx = basePrice * (1 - profile.volatility * 0.4);
+    const dayBaseVolume = profile.dayBaseVolume * (1 + 0.25 * wave + 0.15 * drift);
+    const dayNotionalVolume = dayBaseVolume * midPrice;
+    const fundingRate = profile.funding * (1 + 0.5 * drift);
+    const openInterest = profile.openInterest * (1 + 0.18 * wave);
+    const premium = profile.premium * (1 + 0.4 * wave);
+
+    contexts.push({
+      prevDayPx: formatNumeric(prevDayPx, 4),
+      dayNtlVlm: formatNumeric(dayNotionalVolume, 2),
+      markPx: formatNumeric(markPrice, 4),
+      midPx: formatNumeric(midPrice, 4),
+      funding: formatNumeric(fundingRate, 6),
+      openInterest: formatNumeric(openInterest, 2),
+      premium: formatNumeric(premium, 6),
+      oraclePx: formatNumeric(midPrice * (1 + 0.01 * wave), 4),
+      impactPxs: null,
+      dayBaseVlm: formatNumeric(dayBaseVolume, 2),
+    });
+  });
+
+  return contexts;
+}
 
 class DemoInfoClient {
-  constructor(private readonly meta: MetaResponse, private readonly contexts: AssetContexts) {}
+  constructor(private readonly meta: MetaResponse) {}
 
   async metaAndAssetCtxs(): Promise<MetaAndAssetCtxsTuple> {
-    return [this.meta, this.contexts] as MetaAndAssetCtxsTuple;
+    return [this.meta, buildDemoContexts(this.meta)] as MetaAndAssetCtxsTuple;
   }
 }
 
@@ -165,11 +264,20 @@ function seededRandom(seed: number): number {
   return x - Math.floor(x);
 }
 
+function hashSymbol(symbol: string): number {
+  let hash = 0;
+  for (let index = 0; index < symbol.length; index += 1) {
+    hash = (hash * 31 + symbol.charCodeAt(index)) % 1_000_000;
+  }
+  return hash;
+}
+
 function generateSyntheticCandles(
   midPrice: number,
   volatilityPercent: number,
   volume: number,
   points = 60,
+  symbol = "BTC",
 ): CandleDatum[] {
   const candles: CandleDatum[] = [];
   if (!(midPrice > 0)) {
@@ -179,14 +287,16 @@ function generateSyntheticCandles(
   const baseVolatility = Math.max(volatilityPercent / 100, 0.0025);
   const now = Math.floor(Date.now() / 1000);
   let lastClose = midPrice;
+  const symbolHash = hashSymbol(symbol);
+  const trendBias = (symbolHash % 9) / 10000 - 0.0004;
 
   for (let index = points - 1; index >= 0; index -= 1) {
     const time = now - index * 60;
-    const seed = seededRandom(time);
-    const drift = (seed - 0.5) * baseVolatility * 2;
+    const seed = seededRandom(time + symbolHash);
+    const drift = (seed - 0.5) * baseVolatility * 2 + trendBias;
     const open = lastClose * (1 + drift * 0.35);
-    const high = open * (1 + Math.abs(drift) * 1.25 + seededRandom(time + 1) * baseVolatility);
-    const low = open * (1 - Math.abs(drift) * 1.1 - seededRandom(time + 2) * baseVolatility * 0.8);
+    const high = open * (1 + Math.abs(drift) * 1.25 + seededRandom(time + symbolHash + 1) * baseVolatility);
+    const low = open * (1 - Math.abs(drift) * 1.1 - seededRandom(time + symbolHash + 2) * baseVolatility * 0.8);
     const close = (open + high + low + lastClose) / 4;
     lastClose = close;
 
@@ -197,14 +307,19 @@ function generateSyntheticCandles(
       high,
       low,
       close,
-      volume: normalizedVolume * (0.6 + seededRandom(time + 3) * 0.9),
+      volume: normalizedVolume * (0.6 + seededRandom(time + symbolHash + 3) * 0.9),
     });
   }
 
   return candles;
 }
 
-function buildVolumeDistribution(midPrice: number, volatilityPercent: number, baseVolume: number): MarketVolumeBucket[] {
+function buildVolumeDistribution(
+  midPrice: number,
+  volatilityPercent: number,
+  baseVolume: number,
+  symbol = "BTC",
+): MarketVolumeBucket[] {
   const buckets: MarketVolumeBucket[] = [];
   if (!(midPrice > 0)) {
     return buckets;
@@ -213,10 +328,11 @@ function buildVolumeDistribution(midPrice: number, volatilityPercent: number, ba
   const levels = 9;
   const volatilityFactor = Math.max(volatilityPercent / 100, 0.005);
   const volumeBase = baseVolume > 0 ? baseVolume : midPrice * 12;
+  const offsetPhase = hashSymbol(symbol) / 1_000_000;
 
   for (let index = -Math.floor(levels / 2); index <= Math.floor(levels / 2); index += 1) {
     const offsetFactor = index / Math.max(Math.floor(levels / 2), 1);
-    const price = midPrice * (1 + offsetFactor * volatilityFactor * 0.85);
+    const price = midPrice * (1 + offsetFactor * volatilityFactor * 0.85 + offsetPhase * 0.01);
     const relative = Math.exp(-Math.abs(offsetFactor) * 1.45);
     buckets.push({
       price,
@@ -234,7 +350,7 @@ export function ensureMarketClients(): { infoClient: InfoClient; demoMode: boole
 
   if (!privateKey) {
     if (!(sharedInfoClient instanceof DemoInfoClient)) {
-      sharedInfoClient = new DemoInfoClient(demoMeta, demoContexts);
+      sharedInfoClient = new DemoInfoClient(demoMeta);
     }
     sharedDemoMode = true;
     return { infoClient: sharedInfoClient as unknown as InfoClient, demoMode: true };
@@ -319,8 +435,8 @@ export async function getMarketDataSnapshot(symbol: string): Promise<MarketDataS
     dayBaseVolume,
     dayNotionalVolume,
     volatilityHint: buildVolatilityHint(volatilityPercent),
-    candles: generateSyntheticCandles(midPrice, volatilityPercent, dayBaseVolume),
-    volumeDistribution: buildVolumeDistribution(midPrice, volatilityPercent, dayBaseVolume),
+    candles: generateSyntheticCandles(midPrice, volatilityPercent, dayBaseVolume, 60, normalized),
+    volumeDistribution: buildVolumeDistribution(midPrice, volatilityPercent, dayBaseVolume, normalized),
     timestamp: Date.now(),
     demoMode,
   } satisfies MarketDataSnapshot;
