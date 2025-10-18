@@ -1,4 +1,4 @@
-import { initializeMarketDashboard } from "./charts.js";
+import { initializeAnalyticsDashboard, initializeMarketDashboard } from "./charts.js";
 
 const MODE_PLACEHOLDER = "Mode: —";
 
@@ -20,6 +20,24 @@ const hintSummary = document.getElementById("hint-summary");
 const themeToggle = document.getElementById("theme-toggle");
 const themeToggleLabel = themeToggle?.querySelector(".theme-toggle__label");
 const themeToggleIcon = themeToggle?.querySelector(".theme-toggle__icon");
+const statusRisk = document.getElementById("status-risk");
+const statusRiskDetails = document.getElementById("status-risk-details");
+const statusLastSymbol = document.getElementById("status-last-symbol");
+const statusLastStatus = document.getElementById("status-last-status");
+const statusLastPnl = document.getElementById("status-last-pnl");
+const statusLastNotional = document.getElementById("status-last-notional");
+const statusLastLeverage = document.getElementById("status-last-leverage");
+const statusLastUpdated = document.getElementById("status-last-updated");
+const analyticsRefreshButton = document.getElementById("analytics-refresh");
+const analyticsSummaryElements = {
+  pnl: document.getElementById("analytics-pnl"),
+  winRate: document.getElementById("analytics-winrate"),
+  leverage: document.getElementById("analytics-leverage"),
+  volume: document.getElementById("analytics-volume"),
+};
+const analyticsChartElement = document.getElementById("analytics-pnl-chart");
+const analyticsDailyBody = document.getElementById("analytics-daily-body");
+const analyticsSymbolBody = document.getElementById("analytics-symbol-body");
 
 const marketSymbol = document.getElementById("market-symbol");
 const marketMid = document.getElementById("market-mid");
@@ -76,6 +94,8 @@ const trailEntryStepUnitSelect = document.getElementById("trail-entry-step-unit"
 
 let cachedDefaultSignal = "";
 let marketDashboard = null;
+let analyticsDashboard = null;
+let analyticsIntervalHandle = null;
 
 const THEME_STORAGE_KEY = "hl-theme";
 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
@@ -111,6 +131,7 @@ function applyTheme(theme, persist = false) {
     }
   }
   marketDashboard?.setTheme(resolved);
+  analyticsDashboard?.setTheme(resolved);
 }
 
 function initializeTheme() {
@@ -150,6 +171,7 @@ function createDefaultFeatureState() {
 const featureState = createDefaultFeatureState();
 
 let hintManager = null;
+let lastRiskSnapshot = null;
 
 function syncFeatureUI(feature) {
   const state = featureState[feature];
@@ -764,7 +786,7 @@ form.addEventListener("submit", async (event) => {
 
   try {
     const payload = await executeSignal(combinedSignal);
-    const { demoMode, signal: parsed, payload: orderPayload, response } = payload;
+    const { demoMode, signal: parsed, payload: orderPayload, response, risk } = payload;
 
     statusMessage.className = "status-message success";
     statusMessage.textContent = "Signal executed successfully.";
@@ -773,6 +795,8 @@ form.addEventListener("submit", async (event) => {
     parsedBlock.textContent = JSON.stringify(parsed, null, 2);
     orderBlock.textContent = JSON.stringify(orderPayload, null, 2);
     exchangeBlock.textContent = JSON.stringify(response, null, 2);
+    updateRiskSummaryFromRisk(risk ?? null);
+    await refreshAnalytics({ silent: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     statusMessage.className = "status-message error";
@@ -781,6 +805,7 @@ form.addEventListener("submit", async (event) => {
     parsedBlock.textContent = "(error)";
     orderBlock.textContent = "(error)";
     exchangeBlock.textContent = "(error)";
+    await refreshAnalytics({ silent: true });
   } finally {
     setBusy(false);
   }
@@ -855,3 +880,234 @@ hintManager = new HintManager({
 
 resetFeatures();
 fetchDefaultSignal();
+function formatUsd(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatLeverageValue(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${Number(value).toFixed(2)}×`;
+}
+
+function updateRiskSummaryFromRisk(risk) {
+  lastRiskSnapshot = risk ?? null;
+  if (!statusRisk || !statusRiskDetails) {
+    return;
+  }
+
+  statusRisk.className = "status-indicator";
+  statusRiskDetails.innerHTML = "";
+
+  if (!risk) {
+    statusRisk.textContent = "No recent checks";
+    return;
+  }
+
+  let label = "Within limits";
+  if (!risk.passed) {
+    label = "Blocked";
+    statusRisk.classList.add("status-indicator--error");
+  } else if (risk.warnings.length > 0) {
+    label = "Warnings";
+    statusRisk.classList.add("status-indicator--warning");
+  } else {
+    statusRisk.classList.add("status-indicator--ok");
+  }
+  statusRisk.textContent = label;
+
+  const messages = [];
+  if (Array.isArray(risk.reasons)) {
+    messages.push(...risk.reasons);
+  }
+  if (Array.isArray(risk.warnings)) {
+    messages.push(...risk.warnings);
+  }
+
+  const usage = risk.usage ?? {};
+  const usageEntries = [
+    {
+      label: "Leverage",
+      value: usage.leverage,
+      formatter: (item) => {
+        const valueText = formatLeverageValue(item.value);
+        if (Number.isFinite(item.limit)) {
+          return `${valueText} / ${formatLeverageValue(item.limit)}`;
+        }
+        return valueText;
+      },
+    },
+    {
+      label: "Notional",
+      value: usage.notionalUsd,
+      formatter: (item) => {
+        const valueText = formatUsd(item.value);
+        if (Number.isFinite(item.limit)) {
+          return `${valueText} / ${formatUsd(item.limit)}`;
+        }
+        return valueText;
+      },
+    },
+    {
+      label: "Risk",
+      value: usage.riskUsd,
+      formatter: (item) => {
+        const valueText = formatUsd(item.value);
+        if (Number.isFinite(item.limit)) {
+          return `${valueText} / ${formatUsd(item.limit)}`;
+        }
+        return valueText;
+      },
+    },
+    {
+      label: "Daily loss",
+      value: usage.dailyLossUsd,
+      formatter: (item) => {
+        const valueText = formatUsd(item.value);
+        if (Number.isFinite(item.limit)) {
+          return `${valueText} / ${formatUsd(item.limit)}`;
+        }
+        return valueText;
+      },
+    },
+    {
+      label: "Daily volume",
+      value: usage.dailyVolumeUsd,
+      formatter: (item) => {
+        const valueText = formatUsd(item.value);
+        if (Number.isFinite(item.limit)) {
+          return `${valueText} / ${formatUsd(item.limit)}`;
+        }
+        return valueText;
+      },
+    },
+  ];
+
+  usageEntries.forEach((entry) => {
+    if (!entry.value) {
+      return;
+    }
+    const li = document.createElement("li");
+    li.textContent = `${entry.label}: ${entry.formatter(entry.value)}`;
+    statusRiskDetails.appendChild(li);
+  });
+
+  if (messages.length === 0 && statusRiskDetails.childNodes.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "No warnings.";
+    statusRiskDetails.appendChild(li);
+  }
+
+  messages.forEach((message) => {
+    const li = document.createElement("li");
+    li.textContent = message;
+    statusRiskDetails.appendChild(li);
+  });
+}
+
+function renderLastTrade(entry) {
+  if (!statusLastSymbol || !statusLastStatus || !statusLastPnl || !statusLastNotional || !statusLastLeverage || !statusLastUpdated) {
+    return;
+  }
+
+  if (!entry) {
+    statusLastSymbol.textContent = "—";
+    statusLastStatus.textContent = "—";
+    statusLastStatus.className = "";
+    statusLastPnl.textContent = "—";
+    statusLastPnl.classList.remove("metric-positive", "metric-negative");
+    statusLastNotional.textContent = "—";
+    statusLastLeverage.textContent = "—";
+    statusLastUpdated.textContent = "Updated: —";
+    updateRiskSummaryFromRisk(lastRiskSnapshot);
+    return;
+  }
+
+  statusLastSymbol.textContent = `${entry.signal.symbol} (${entry.signal.side})`;
+  statusLastStatus.textContent = entry.status;
+  statusLastStatus.className = "";
+  if (entry.status === "filled") {
+    statusLastStatus.classList.add("metric-positive");
+  } else if (entry.status === "blocked" || entry.status === "rejected" || entry.status === "error") {
+    statusLastStatus.classList.add("metric-negative");
+  }
+
+  const pnl = Number(entry.estimates?.projectedPnlUsd ?? 0);
+  statusLastPnl.textContent = formatUsd(pnl);
+  statusLastPnl.classList.toggle("metric-positive", pnl > 0);
+  statusLastPnl.classList.toggle("metric-negative", pnl < 0);
+
+  statusLastNotional.textContent = formatUsd(entry.estimates?.notionalUsd);
+  const leverageValue = entry.estimates?.leverage ?? entry.signal.leverage;
+  statusLastLeverage.textContent = formatLeverageValue(leverageValue);
+  statusLastUpdated.textContent = `Updated: ${new Date(entry.timestamp).toLocaleString()}`;
+  updateRiskSummaryFromRisk(entry.risk ?? null);
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    payload = null;
+  }
+  if (!response.ok) {
+    const message = payload && typeof payload.error === "string"
+      ? payload.error
+      : `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return payload;
+}
+
+async function refreshAnalytics(options = {}) {
+  const silent = options.silent ?? false;
+  try {
+    const [metrics, history] = await Promise.all([
+      fetchJson("/api/metrics"),
+      fetchJson("/api/history?limit=25"),
+    ]);
+    analyticsDashboard?.render({ metrics });
+    const entries = Array.isArray(history?.entries) ? history.entries : [];
+    renderLastTrade(entries[0]);
+  } catch (error) {
+    if (!silent) {
+      console.warn("Failed to refresh analytics", error);
+    }
+  }
+}
+
+analyticsDashboard =
+  analyticsChartElement
+    ? initializeAnalyticsDashboard({
+        chartElement: analyticsChartElement,
+        summary: analyticsSummaryElements,
+        tables: { daily: analyticsDailyBody, symbols: analyticsSymbolBody },
+        theme: body.dataset.theme,
+      })
+    : null;
+
+analyticsDashboard?.setTheme(body.dataset.theme ?? "dark");
+
+analyticsRefreshButton?.addEventListener("click", () => {
+  refreshAnalytics();
+});
+
+renderLastTrade(null);
+updateRiskSummaryFromRisk(null);
+refreshAnalytics({ silent: true });
+
+if (typeof window !== "undefined") {
+  analyticsIntervalHandle = window.setInterval(() => {
+    refreshAnalytics({ silent: true });
+  }, 30000);
+}

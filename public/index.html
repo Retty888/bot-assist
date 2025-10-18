@@ -253,6 +253,39 @@
           <span id="status-mode">Mode: &mdash;</span>
         </div>
         <div id="status-message" class="status-message">Ready when you are.</div>
+        <div class="status-insights">
+          <article class="status-pane" aria-live="polite">
+            <h3>Risk guard</h3>
+            <p id="status-risk" class="status-indicator">—</p>
+            <ul id="status-risk-details" class="status-list"></ul>
+          </article>
+          <article class="status-pane" aria-live="polite">
+            <h3>Last execution</h3>
+            <dl class="status-detail">
+              <div>
+                <dt>Symbol</dt>
+                <dd id="status-last-symbol">—</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd id="status-last-status">—</dd>
+              </div>
+              <div>
+                <dt>PnL (proj.)</dt>
+                <dd id="status-last-pnl">—</dd>
+              </div>
+              <div>
+                <dt>Notional</dt>
+                <dd id="status-last-notional">—</dd>
+              </div>
+              <div>
+                <dt>Leverage</dt>
+                <dd id="status-last-leverage">—</dd>
+              </div>
+            </dl>
+            <p id="status-last-updated" class="status-timestamp">Updated: —</p>
+          </article>
+        </div>
         <details class="details" open>
           <summary>Parsed signal</summary>
           <pre id="parsed-signal">(waiting)</pre>
@@ -265,6 +298,73 @@
           <summary>Exchange response</summary>
           <pre id="exchange-response">(waiting)</pre>
         </details>
+      </section>
+
+      <section class="card analytics" id="analytics-card">
+        <header class="analytics-header">
+          <div>
+            <h2>Analytics</h2>
+            <p>Monitor cumulative performance, win rate, and leverage utilization.</p>
+          </div>
+          <button id="analytics-refresh" type="button" class="ghost">Refresh</button>
+        </header>
+        <div class="analytics-summary" role="list">
+          <div class="analytics-summary__item" role="listitem">
+            <span class="analytics-summary__label">Cumulative PnL</span>
+            <span id="analytics-pnl" class="analytics-summary__value">—</span>
+          </div>
+          <div class="analytics-summary__item" role="listitem">
+            <span class="analytics-summary__label">Win rate</span>
+            <span id="analytics-winrate" class="analytics-summary__value">—</span>
+          </div>
+          <div class="analytics-summary__item" role="listitem">
+            <span class="analytics-summary__label">Avg leverage</span>
+            <span id="analytics-leverage" class="analytics-summary__value">—</span>
+          </div>
+          <div class="analytics-summary__item" role="listitem">
+            <span class="analytics-summary__label">Daily volume</span>
+            <span id="analytics-volume" class="analytics-summary__value">—</span>
+          </div>
+        </div>
+        <div id="analytics-pnl-chart" class="analytics-chart" role="img" aria-label="Cumulative PnL chart"></div>
+        <div class="analytics-grid">
+          <div class="analytics-table">
+            <h3>Daily performance</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Trades</th>
+                  <th scope="col">PnL</th>
+                  <th scope="col">ROI</th>
+                </tr>
+              </thead>
+              <tbody id="analytics-daily-body">
+                <tr>
+                  <td colspan="4">No data</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="analytics-table">
+            <h3>Symbol breakdown</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Symbol</th>
+                  <th scope="col">Trades</th>
+                  <th scope="col">Win %</th>
+                  <th scope="col">PnL</th>
+                </tr>
+              </thead>
+              <tbody id="analytics-symbol-body">
+                <tr>
+                  <td colspan="4">No data</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <footer class="footer">

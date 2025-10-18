@@ -10,6 +10,9 @@ import {
   type HyperliquidBotOptions,
 } from "../trading/hyperliquidTradingBot.js";
 import { normalizeSymbol } from "../trading/tradeSignalParser.js";
+import { ExecutionLogger, type ExecutionHistoryOptions, type ExecutionMetrics } from "../telemetry/executionLogger.js";
+import { NotificationService } from "../telemetry/notificationService.js";
+import { RiskEngine, type RiskLimits } from "../risk/riskEngine.js";
 
 export const DEFAULT_SIGNAL = "Long BTC 2 stop 58000 tp1 62000 tp2 63000 market";
 
@@ -135,6 +138,9 @@ let sharedTransport: HttpTransport | undefined;
 let sharedInfoClient: InfoClient | DemoInfoClient | undefined;
 let sharedDemoMode = false;
 let sharedAssetsCache: CachedAssets | undefined;
+let sharedExecutionLogger: ExecutionLogger | undefined;
+let sharedRiskEngine: RiskEngine | undefined;
+let sharedNotifier: NotificationService | undefined;
 
 function parseNumeric(value: NumericLike): number | undefined {
   if (typeof value === "number") {
@@ -356,8 +362,81 @@ export function resolveBotOptions(): RuntimeConfig {
 
 export function instantiateTradingBot(): { bot: HyperliquidTradingBot; demoMode: boolean } {
   const { options, demoMode } = resolveBotOptions();
+  const logger = ensureExecutionLogger();
+  const notifier = ensureNotificationService();
+  const riskEngine = ensureRiskEngine(logger);
   return {
-    bot: new HyperliquidTradingBot(options),
+    bot: new HyperliquidTradingBot({ ...options, logger, notifier, riskEngine, demoMode }),
     demoMode,
   };
+}
+
+function ensureExecutionLogger(): ExecutionLogger {
+  if (!sharedExecutionLogger) {
+    sharedExecutionLogger = new ExecutionLogger({
+      storagePath: process.env.EXECUTION_LOG_PATH,
+    });
+    void sharedExecutionLogger.initialize();
+  }
+  return sharedExecutionLogger;
+}
+
+function parseLimit(name: string, fallback?: number): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const numeric = Number.parseFloat(raw);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function resolveRiskLimits(): RiskLimits {
+  return {
+    maxLeverage: parseLimit("RISK_MAX_LEVERAGE", 5),
+    maxTradeNotionalUsd: parseLimit("RISK_MAX_TRADE_NOTIONAL_USD", 150_000),
+    maxTradeRiskUsd: parseLimit("RISK_MAX_TRADE_RISK_USD", 10_000),
+    maxDailyLossUsd: parseLimit("RISK_MAX_DAILY_LOSS_USD", 25_000),
+    maxDailyVolumeUsd: parseLimit("RISK_MAX_DAILY_VOLUME_USD", 750_000),
+  } satisfies RiskLimits;
+}
+
+function ensureRiskEngine(logger: ExecutionLogger): RiskEngine {
+  if (!sharedRiskEngine) {
+    sharedRiskEngine = new RiskEngine({
+      limits: resolveRiskLimits(),
+      warningThreshold: parseLimit("RISK_WARNING_THRESHOLD", 0.8),
+      metricsProvider: () => logger.getMetrics(),
+    });
+  }
+  return sharedRiskEngine;
+}
+
+function ensureNotificationService(): NotificationService {
+  if (!sharedNotifier) {
+    sharedNotifier = new NotificationService({
+      webhookUrl: process.env.ALERT_WEBHOOK_URL,
+      emitToConsole: (process.env.ALERT_CONSOLE ?? "true").toLowerCase() !== "false",
+    });
+  }
+  return sharedNotifier;
+}
+
+export function getExecutionLogger(): ExecutionLogger {
+  return ensureExecutionLogger();
+}
+
+export function getRiskEngine(): RiskEngine {
+  return ensureRiskEngine(ensureExecutionLogger());
+}
+
+export function getNotifier(): NotificationService {
+  return ensureNotificationService();
+}
+
+export async function getExecutionMetrics(): Promise<ExecutionMetrics> {
+  return ensureExecutionLogger().getMetrics();
+}
+
+export async function getExecutionHistory(options?: ExecutionHistoryOptions) {
+  return ensureExecutionLogger().getHistory(options);
 }

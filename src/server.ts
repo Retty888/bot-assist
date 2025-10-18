@@ -6,6 +6,8 @@ import express, { type Request, type Response } from "express";
 import { parseTradeSignal } from "./trading/tradeSignalParser.js";
 import {
   DEFAULT_SIGNAL,
+  getExecutionHistory,
+  getExecutionMetrics,
   getMarketDataSnapshot,
   instantiateTradingBot,
 } from "./runtime/botRuntime.js";
@@ -123,10 +125,33 @@ app.post("/api/execute", async (req: Request, res: Response) => {
       signal: result.signal,
       payload: result.payload,
       response: result.response,
+      risk: result.risk,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(400).json({ error: message });
+  }
+});
+
+app.get("/api/metrics", async (_req: Request, res: Response) => {
+  try {
+    const metrics = await getExecutionMetrics();
+    res.json(metrics);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load metrics";
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get("/api/history", async (req: Request, res: Response) => {
+  try {
+    const limitParam = req.query.limit;
+    const limit = typeof limitParam === "string" ? Number.parseInt(limitParam, 10) : undefined;
+    const history = await getExecutionHistory({ limit: Number.isFinite(limit) ? limit : undefined });
+    res.json({ entries: history });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load execution history";
+    res.status(500).json({ error: message });
   }
 });
 

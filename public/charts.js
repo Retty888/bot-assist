@@ -33,6 +33,23 @@ const layerColorMap = {
   },
 };
 
+const analyticsColorMap = {
+  dark: {
+    line: "#38bdf8",
+    top: "rgba(56, 189, 248, 0.35)",
+    bottom: "rgba(8, 47, 73, 0.05)",
+    text: layerColorMap.dark.text,
+    grid: layerColorMap.dark.grid,
+  },
+  light: {
+    line: "#2563eb",
+    top: "rgba(37, 99, 235, 0.3)",
+    bottom: "rgba(191, 219, 254, 0.08)",
+    text: layerColorMap.light.text,
+    grid: layerColorMap.light.grid,
+  },
+};
+
 function formatCurrency(value) {
   if (!Number.isFinite(value)) {
     return "—";
@@ -344,6 +361,210 @@ export function initializeMarketDashboard(options) {
         window.clearTimeout(refreshHandle);
       }
       window.removeEventListener("resize", handleResize);
+      chart.remove();
+    },
+  };
+}
+
+export function initializeAnalyticsDashboard(options) {
+  const chartElement = options?.chartElement;
+  const summary = options?.summary ?? {};
+  const tables = options?.tables ?? {};
+  if (!chartElement) {
+    return null;
+  }
+
+  const chartLibrary = window.LightweightCharts;
+  if (!chartLibrary) {
+    console.warn("LightweightCharts library is not loaded. Analytics dashboard disabled.");
+    return null;
+  }
+
+  let currentTheme = resolveTheme(options?.theme);
+  const palette = analyticsColorMap[currentTheme];
+
+  const chart = chartLibrary.createChart(chartElement, {
+    width: chartElement.clientWidth,
+    height: chartElement.clientHeight,
+    layout: { background: { color: "transparent" }, textColor: palette.text },
+    rightPriceScale: { visible: false },
+    leftPriceScale: { visible: false },
+    timeScale: { borderVisible: false },
+    grid: {
+      horzLines: { color: palette.grid },
+      vertLines: { color: palette.grid },
+    },
+    handleScroll: false,
+    handleScale: false,
+  });
+
+  const areaSeries = chart.addAreaSeries({
+    lineColor: palette.line,
+    topColor: palette.top,
+    bottomColor: palette.bottom,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+  });
+
+  const resizeObserver = typeof ResizeObserver !== "undefined"
+    ? new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          chart.resize(width, height);
+        }
+      })
+    : null;
+
+  resizeObserver?.observe(chartElement);
+
+  function applyTheme(theme) {
+    currentTheme = resolveTheme(theme);
+    const colors = analyticsColorMap[currentTheme];
+    chart.applyOptions({
+      layout: { background: { color: "transparent" }, textColor: colors.text },
+      grid: {
+        horzLines: { color: colors.grid },
+        vertLines: { color: colors.grid },
+      },
+    });
+    areaSeries.applyOptions({
+      lineColor: colors.line,
+      topColor: colors.top,
+      bottomColor: colors.bottom,
+    });
+  }
+
+  function updateSummary(totals) {
+    if (summary.pnl) {
+      summary.pnl.textContent = formatCurrency(totals?.projectedPnlUsd);
+      summary.pnl.classList.toggle("metric-positive", Number(totals?.projectedPnlUsd) > 0);
+      summary.pnl.classList.toggle("metric-negative", Number(totals?.projectedPnlUsd) < 0);
+    }
+    if (summary.winRate) {
+      summary.winRate.textContent = Number.isFinite(totals?.winRate)
+        ? `${totals.winRate.toFixed(1)}%`
+        : "—";
+    }
+    if (summary.leverage) {
+      summary.leverage.textContent = Number.isFinite(totals?.averageLeverage)
+        ? `${totals.averageLeverage.toFixed(2)}×`
+        : "—";
+    }
+    if (summary.volume) {
+      summary.volume.textContent = formatCurrency(totals?.dailyVolumeUsd);
+    }
+  }
+
+  function renderEmptyRow(target, span) {
+    if (!target) {
+      return;
+    }
+    target.innerHTML = "";
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = span;
+    cell.textContent = "No data";
+    row.appendChild(cell);
+    target.appendChild(row);
+  }
+
+  function renderDailyTable(items) {
+    const target = tables.daily;
+    if (!target) {
+      return;
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      renderEmptyRow(target, 4);
+      return;
+    }
+    target.innerHTML = "";
+    items.forEach((item) => {
+      const row = document.createElement("tr");
+      const columns = [
+        item.date,
+        item.trades,
+        formatCurrency(item.projectedPnlUsd),
+        formatPercent(item.projectedRoiPercent),
+      ];
+      columns.forEach((value, index) => {
+        const cell = document.createElement("td");
+        cell.textContent = typeof value === "number" ? String(value) : value ?? "—";
+        if (index === 2) {
+          const numeric = item.projectedPnlUsd ?? 0;
+          cell.classList.toggle("metric-positive", numeric > 0);
+          cell.classList.toggle("metric-negative", numeric < 0);
+        }
+        if (index === 3 && Number.isFinite(item.projectedRoiPercent)) {
+          cell.textContent = `${item.projectedRoiPercent.toFixed(2)}%`;
+        }
+        row.appendChild(cell);
+      });
+      target.appendChild(row);
+    });
+  }
+
+  function renderSymbolTable(items) {
+    const target = tables.symbols;
+    if (!target) {
+      return;
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      renderEmptyRow(target, 4);
+      return;
+    }
+    target.innerHTML = "";
+    items.forEach((item) => {
+      const row = document.createElement("tr");
+      const cells = [
+        item.symbol,
+        item.trades,
+        Number.isFinite(item.winRate) ? `${item.winRate.toFixed(1)}%` : "—",
+        formatCurrency(item.projectedPnlUsd),
+      ];
+      cells.forEach((value, index) => {
+        const cell = document.createElement("td");
+        cell.textContent = typeof value === "number" ? String(value) : value ?? "—";
+        if (index === 3) {
+          const numeric = item.projectedPnlUsd ?? 0;
+          cell.classList.toggle("metric-positive", numeric > 0);
+          cell.classList.toggle("metric-negative", numeric < 0);
+        }
+        row.appendChild(cell);
+      });
+      target.appendChild(row);
+    });
+  }
+
+  function render(data) {
+    const metrics = data?.metrics;
+    if (!metrics) {
+      updateSummary(undefined);
+      areaSeries.setData([]);
+      renderDailyTable([]);
+      renderSymbolTable([]);
+      return;
+    }
+
+    updateSummary(metrics.totals);
+    const seriesData = metrics.pnlSeries.map((point) => ({
+      time: Math.floor(point.timestamp / 1000),
+      value: Number.isFinite(point.cumulative) ? Number(point.cumulative.toFixed(2)) : 0,
+    }));
+    areaSeries.setData(seriesData);
+    if (seriesData.length > 0) {
+      chart.timeScale().fitContent();
+    }
+    renderDailyTable(metrics.daily);
+    renderSymbolTable(metrics.symbols);
+  }
+
+  return {
+    setTheme: applyTheme,
+    render,
+    destroy() {
+      resizeObserver?.disconnect();
       chart.remove();
     },
   };

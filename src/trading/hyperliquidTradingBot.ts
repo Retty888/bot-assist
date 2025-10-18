@@ -1,5 +1,9 @@
 import { ExchangeClient, HttpTransport, InfoClient, type OrderParameters } from "@nktkas/hyperliquid";
 
+import type { ExecutionLogger, ExecutionStatus } from "../telemetry/executionLogger.js";
+import type { NotificationService } from "../telemetry/notificationService.js";
+import type { RiskCheckResult, RiskEngine } from "../risk/riskEngine.js";
+
 import {
   normalizeSymbol,
   parseTradeSignal,
@@ -19,6 +23,10 @@ export interface HyperliquidBotOptions {
   readonly infoClient?: InfoClient;
   readonly exchangeClient?: ExchangeClient;
   readonly transport?: HttpTransport;
+  readonly logger?: ExecutionLogger;
+  readonly riskEngine?: RiskEngine;
+  readonly notifier?: NotificationService;
+  readonly demoMode?: boolean;
 }
 
 type ExchangeOrderResponse = Awaited<ReturnType<ExchangeClient["order"]>>;
@@ -27,6 +35,7 @@ export interface ExecutionResult {
   readonly signal: TradeSignal;
   readonly payload: OrderParameters;
   readonly response: ExchangeOrderResponse;
+  readonly risk?: RiskCheckResult | null;
 }
 
 interface AssetMeta {
@@ -86,6 +95,10 @@ export class HyperliquidTradingBot {
   private readonly exchange: ExchangeClient;
   private readonly slippageBps: number;
   private readonly cacheTtlMs: number;
+  private readonly logger?: ExecutionLogger;
+  private readonly riskEngine?: RiskEngine;
+  private readonly notifier?: NotificationService;
+  private readonly demoMode: boolean;
 
   private cache?: CachedAssets;
 
@@ -100,6 +113,10 @@ export class HyperliquidTradingBot {
       options.exchangeClient ?? new ExchangeClient({ wallet: options.privateKey as string, transport });
     this.slippageBps = options.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
     this.cacheTtlMs = options.metaRefreshIntervalMs ?? DEFAULT_CACHE_TTL_MS;
+    this.logger = options.logger;
+    this.riskEngine = options.riskEngine;
+    this.notifier = options.notifier;
+    this.demoMode = options.demoMode ?? false;
   }
 
   async executeSignalText(text: string): Promise<ExecutionResult> {
@@ -112,8 +129,187 @@ export class HyperliquidTradingBot {
     const asset = this.resolveAsset(cache, signal.symbol);
     const entryContext = this.resolveEntryContext(signal, asset, cache);
     const payload = this.buildOrderPayload(signal, asset, entryContext);
-    const response = await this.exchange.order(payload);
-    return { signal, payload, response };
+    const entryPrice = entryContext.basePrice;
+    const notionalUsd = entryPrice * signal.size;
+    const estimatedRiskUsd = this.estimateRiskUsd(signal, entryPrice);
+    const leverage = signal.leverage;
+
+    let riskResult: RiskCheckResult | null = null;
+    if (this.riskEngine) {
+      riskResult = await this.riskEngine.evaluate(signal, {
+        entryPrice,
+        midPrice: entryContext.midPrice,
+        notionalUsd,
+        leverage,
+        estimatedRiskUsd,
+        timestamp: Date.now(),
+        demoMode: this.demoMode,
+      });
+
+      if (!riskResult.passed) {
+        const notes = riskResult.reasons.join("; ") || "Risk guard rejected the trade";
+        await this.logger?.logFailure(signal, {
+          status: "blocked",
+          demoMode: this.demoMode,
+          entryPrice,
+          midPrice: entryContext.midPrice,
+          leverage,
+          risk: riskResult,
+          notes,
+        });
+        await this.notifier?.notify({ type: "risk_block", signal, risk: riskResult, demoMode: this.demoMode });
+        throw new Error(`Risk guard blocked trade: ${notes}`);
+      }
+
+      if (riskResult.warnings.length > 0) {
+        await this.notifier?.notify({ type: "risk_warning", signal, risk: riskResult, demoMode: this.demoMode });
+      }
+    }
+
+    try {
+      const response = await this.exchange.order(payload);
+      const evaluation = this.evaluateExchangeResponse(response);
+      const notes = this.composeNotes(riskResult, evaluation.message);
+
+      await this.logger?.logExecution(signal, payload, response, {
+        status: evaluation.status,
+        demoMode: this.demoMode,
+        entryPrice,
+        midPrice: entryContext.midPrice,
+        leverage,
+        risk: riskResult,
+        notes,
+      });
+
+      if (evaluation.abnormal) {
+        await this.notifier?.notify({
+          type: "exchange_error",
+          signal,
+          payload,
+          response,
+          message: evaluation.message ?? "Exchange response flagged as abnormal",
+          demoMode: this.demoMode,
+        });
+      }
+
+      return { signal, payload, response, risk: riskResult };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown exchange error";
+      await this.logger?.logFailure(signal, {
+        status: "error",
+        demoMode: this.demoMode,
+        entryPrice,
+        midPrice: entryContext.midPrice,
+        leverage,
+        risk: riskResult,
+        notes: message,
+      });
+      await this.notifier?.notify({
+        type: "exchange_error",
+        signal,
+        payload,
+        response: null,
+        message,
+        demoMode: this.demoMode,
+      });
+      throw error;
+    }
+  }
+
+  private estimateRiskUsd(signal: TradeSignal, entryPrice: number): number | undefined {
+    const stop = signal.stopLosses[0]?.price ?? signal.stopLoss;
+    if (!(stop && stop > 0)) {
+      return undefined;
+    }
+    const direction = signal.side === "short" ? 1 : -1;
+    const delta = (stop - entryPrice) * direction;
+    if (!(delta > 0)) {
+      return undefined;
+    }
+    return delta * signal.size;
+  }
+
+  private evaluateExchangeResponse(response: ExchangeOrderResponse): {
+    status: ExecutionStatus;
+    abnormal: boolean;
+    message?: string;
+  } {
+    if (!response || typeof response !== "object") {
+      return { status: "error", abnormal: true, message: "Empty response from exchange" };
+    }
+
+    const container = response as Record<string, unknown>;
+    const rawStatus = typeof container.status === "string" ? (container.status as string) : undefined;
+    const normalizedStatus = rawStatus?.toLowerCase();
+    const rawData = container.data;
+    const statuses =
+      rawData && typeof rawData === "object" && Array.isArray((rawData as Record<string, unknown>).statuses)
+        ? ((rawData as { statuses: unknown[] }).statuses as unknown[])
+        : [];
+
+    const statusLabels = statuses
+      .map((item) => {
+        if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          const value = record.status ?? record.state ?? record.result;
+          return typeof value === "string" ? value.toLowerCase() : undefined;
+        }
+        return undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+
+    if (normalizedStatus && normalizedStatus !== "ok") {
+      return {
+        status: "error",
+        abnormal: true,
+        message: `Exchange returned status ${rawStatus}`,
+      };
+    }
+
+    if (statusLabels.length === 0) {
+      return { status: "submitted", abnormal: false };
+    }
+
+    const hasFailure = statusLabels.some((value) => /fail|error|reject|cancel/.test(value));
+    if (hasFailure) {
+      return {
+        status: "rejected",
+        abnormal: true,
+        message: `Exchange reported failure statuses: ${statusLabels.join(", ")}`,
+      };
+    }
+
+    const allFilled = statusLabels.every((value) => /fill|fulfilled|done/.test(value));
+    if (allFilled) {
+      return { status: "filled", abnormal: false };
+    }
+
+    const hasResting = statusLabels.some((value) => /resting/.test(value));
+    const hasPartial = statusLabels.some((value) => /partial/.test(value));
+    if (hasPartial) {
+      return {
+        status: "partial",
+        abnormal: true,
+        message: "Order partially filled",
+      };
+    }
+
+    if (hasResting) {
+      return { status: "submitted", abnormal: false, message: "Resting orders accepted" };
+    }
+
+    return { status: "submitted", abnormal: false };
+  }
+
+  private composeNotes(risk: RiskCheckResult | null, extra?: string): string | undefined {
+    const notes: string[] = [];
+    if (risk?.warnings.length) {
+      notes.push(`Warnings: ${risk.warnings.join("; ")}`);
+    }
+    if (extra) {
+      notes.push(extra);
+    }
+    return notes.length > 0 ? notes.join(" | ") : undefined;
   }
 
   private async ensureCache(): Promise<CachedAssets> {
