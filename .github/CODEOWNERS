@@ -1,0 +1,14 @@
+# Hyperliquid Bot ownership map
+
+# Documentation
+/docs/ @imelnik @sprutkova @osorokina
+
+# Infrastructure
+/infra/ @vlitvin @gstatsenko
+
+# Application runtime and services
+/src/ @imelnik @sprutkova
+/tests/ @imelnik @sprutkova
+
+# GitHub workflows
+/.github/workflows/ @vlitvin @mmatskevich
