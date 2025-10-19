@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ExchangeClient,
@@ -72,6 +72,12 @@ class FakeExchangeClient {
 }
 
 describe("HyperliquidTradingBot", () => {
+  beforeEach(() => {
+    Reflect.set(HyperliquidTradingBot as unknown as Record<string, unknown>, "sharedCache", undefined);
+    Reflect.set(HyperliquidTradingBot as unknown as Record<string, unknown>, "inflightCachePromise", undefined);
+    vi.useRealTimers();
+  });
+
   it("creates market entry with grouped TP/SL", async () => {
     const info = new FakeInfoClient(baseMeta, baseContexts);
     const exchange = new FakeExchangeClient();
@@ -154,5 +160,55 @@ describe("HyperliquidTradingBot", () => {
     const stopOrder = payload.orders[payload.orders.length - 1];
     expect(stopOrder.t?.trigger?.tpsl).toBe("sl");
     expect(stopOrder.p).toBe("59500");
+  });
+
+  it("coalesces concurrent cache refresh requests", async () => {
+    const info = new FakeInfoClient(baseMeta, baseContexts);
+    const bot = new HyperliquidTradingBot({
+      infoClient: info as unknown as InfoClient,
+      exchangeClient: new FakeExchangeClient() as unknown as ExchangeClient,
+      metaCacheRefreshMode: "blocking",
+    });
+
+    const ensureCache = (bot as unknown as {
+      ensureCache: (options?: { forceRefresh?: boolean }) => Promise<unknown>;
+    }).ensureCache.bind(bot);
+
+    await Promise.all([
+      ensureCache({ forceRefresh: true }),
+      ensureCache({ forceRefresh: true }),
+      ensureCache({ forceRefresh: true }),
+    ]);
+
+    expect(info.calls).toBe(1);
+  });
+
+  it("refreshes metadata at most once per TTL window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-01-01T00:00:00Z").valueOf());
+
+    const info = new FakeInfoClient(baseMeta, baseContexts);
+    const exchange = new FakeExchangeClient();
+    const bot = new HyperliquidTradingBot({
+      infoClient: info as unknown as InfoClient,
+      exchangeClient: exchange as unknown as ExchangeClient,
+      metaRefreshIntervalMs: 1_000,
+      metaCacheRefreshMode: "background",
+    });
+
+    await bot.executeSignalText("Long BTC 1 stop 59000 tp 61000 market");
+    expect(info.calls).toBe(1);
+
+    await bot.executeSignalText("Long BTC 1 stop 59000 tp 61000 market");
+    expect(info.calls).toBe(1);
+
+    vi.advanceTimersByTime(1_100);
+
+    await Promise.all([
+      bot.executeSignalText("Long BTC 1 stop 59000 tp 61000 market"),
+      bot.executeSignalText("Long BTC 1 stop 59000 tp 61000 market"),
+    ]);
+
+    expect(info.calls).toBe(2);
   });
 });

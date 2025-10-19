@@ -16,6 +16,7 @@ export interface HyperliquidBotOptions {
   readonly isTestnet?: boolean;
   readonly slippageBps?: number;
   readonly metaRefreshIntervalMs?: number;
+  readonly metaCacheRefreshMode?: "blocking" | "background";
   readonly infoClient?: InfoClient;
   readonly exchangeClient?: ExchangeClient;
   readonly transport?: HttpTransport;
@@ -82,12 +83,14 @@ function entrySide(side: TradeSignal["side"]): boolean {
 }
 
 export class HyperliquidTradingBot {
+  private static sharedCache?: CachedAssets;
+  private static inflightCachePromise?: Promise<CachedAssets>;
+
   private readonly info: InfoClient;
   private readonly exchange: ExchangeClient;
   private readonly slippageBps: number;
   private readonly cacheTtlMs: number;
-
-  private cache?: CachedAssets;
+  private readonly cacheRefreshMode: "blocking" | "background";
 
   constructor(options: HyperliquidBotOptions) {
     if (!options.exchangeClient && !options.privateKey) {
@@ -100,6 +103,7 @@ export class HyperliquidTradingBot {
       options.exchangeClient ?? new ExchangeClient({ wallet: options.privateKey as string, transport });
     this.slippageBps = options.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
     this.cacheTtlMs = options.metaRefreshIntervalMs ?? DEFAULT_CACHE_TTL_MS;
+    this.cacheRefreshMode = options.metaCacheRefreshMode ?? "background";
   }
 
   async executeSignalText(text: string): Promise<ExecutionResult> {
@@ -108,7 +112,7 @@ export class HyperliquidTradingBot {
   }
 
   async executeSignal(signal: TradeSignal): Promise<ExecutionResult> {
-    const cache = await this.ensureCache();
+    const cache = await this.ensureCache({ forceRefresh: this.cacheRefreshMode === "blocking" });
     const asset = this.resolveAsset(cache, signal.symbol);
     const entryContext = this.resolveEntryContext(signal, asset, cache);
     const payload = this.buildOrderPayload(signal, asset, entryContext);
@@ -116,12 +120,49 @@ export class HyperliquidTradingBot {
     return { signal, payload, response };
   }
 
-  private async ensureCache(): Promise<CachedAssets> {
+  private async ensureCache(options: { forceRefresh?: boolean } = {}): Promise<CachedAssets> {
     const now = Date.now();
-    if (this.cache && now - this.cache.timestamp < this.cacheTtlMs) {
-      return this.cache;
+    const cache = HyperliquidTradingBot.sharedCache;
+    const isFresh = cache !== undefined && now - cache.timestamp < this.cacheTtlMs;
+
+    if (!options.forceRefresh && isFresh) {
+      return cache;
     }
 
+    if (!cache) {
+      return this.awaitCacheRefresh();
+    }
+
+    if (options.forceRefresh) {
+      return this.awaitCacheRefresh();
+    }
+
+    this.scheduleBackgroundRefresh();
+    return cache;
+  }
+
+  private scheduleBackgroundRefresh(): void {
+    const promise = this.getOrCreateCachePromise();
+    void promise.catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error("Failed to refresh Hyperliquid metadata cache", error);
+    });
+  }
+
+  private awaitCacheRefresh(): Promise<CachedAssets> {
+    return this.getOrCreateCachePromise();
+  }
+
+  private getOrCreateCachePromise(): Promise<CachedAssets> {
+    if (!HyperliquidTradingBot.inflightCachePromise) {
+      HyperliquidTradingBot.inflightCachePromise = this.reloadCache().finally(() => {
+        HyperliquidTradingBot.inflightCachePromise = undefined;
+      });
+    }
+    return HyperliquidTradingBot.inflightCachePromise;
+  }
+
+  private async reloadCache(): Promise<CachedAssets> {
     const [meta, contexts] = await this.info.metaAndAssetCtxs();
     const assetsBySymbol = new Map<string, AssetMeta>();
     meta.universe.forEach((item, index) => {
@@ -135,12 +176,13 @@ export class HyperliquidTradingBot {
       }
     });
 
-    this.cache = {
-      timestamp: now,
+    const cache: CachedAssets = {
+      timestamp: Date.now(),
       assetsBySymbol,
       contexts,
     };
-    return this.cache;
+    HyperliquidTradingBot.sharedCache = cache;
+    return cache;
   }
 
   private resolveAsset(cache: CachedAssets, symbol: string): AssetMeta {
