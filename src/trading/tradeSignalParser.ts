@@ -124,11 +124,6 @@ const VALUE_WITH_PERCENT_PATTERN = new RegExp(
 const PERCENT_FINDER_PATTERN = /(\\d+(?:[.,]\\d+)?)\\s*(%|pct|percent)/i;
 const URL_PATTERN = /https?:/i;
 
-const SPLIT_REGEX = /[\s,;]+/g;
-
-const TAKE_PROFIT_TOKEN_PATTERN = /\b(?:tp\d*|tp|take\s*profit\d*|take\s*profit|target\d*|target)\b/gi;
-const STOP_LEVEL_TOKEN_PATTERN = /\b(?:sl\d*|stoploss\d*|stoplosses\d*|stop(?:\s*loss(?:es)?)?\d*|psl\d*)\b/gi;
-
 const RISK_PATTERNS = [
   /\brisk(?:\s*level|\s*profile|\s*label)?\b\s*(?:=|:)?\s*([a-z\-]+)/i,
   /\b([a-z\-]+)\s*risk\b/i,
@@ -240,6 +235,229 @@ function parseNumeric(value: string): number | undefined {
 
 function cleanToken(token: string): string {
   return token.replace(/^[^A-Za-z0-9@]+|[^A-Za-z0-9@]+$/g, "");
+}
+
+interface TokenSlice {
+  readonly raw: string;
+  readonly clean: string;
+  readonly lower: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+interface PatternSource {
+  readonly text: string;
+  readonly priority: number;
+}
+
+function isSeparator(char: string): boolean {
+  return /[\s,;]/.test(char);
+}
+
+function tokenizeSignalText(text: string): TokenSlice[] {
+  const tokens: TokenSlice[] = [];
+  let tokenStart = -1;
+  for (let i = 0; i <= text.length; ++i) {
+    const char = text[i] ?? "";
+    if (i === text.length || isSeparator(char)) {
+      if (tokenStart >= 0) {
+        const raw = text.slice(tokenStart, i);
+        const clean = cleanToken(raw);
+        tokens.push({
+          raw,
+          clean,
+          lower: clean.toLowerCase(),
+          start: tokenStart,
+          end: i,
+        });
+        tokenStart = -1;
+      }
+    } else if (tokenStart < 0) {
+      tokenStart = i;
+    }
+  }
+  return tokens;
+}
+
+function addPatternSource(target: PatternSource[], text: string, priority: number): void {
+  if (!text) {
+    return;
+  }
+  target.push({
+    text,
+    priority,
+  });
+}
+
+function collectNumericValues(patterns: readonly RegExp[], sources: readonly PatternSource[]): number[] {
+  const results: { readonly value: number; readonly priority: number }[] = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      const match = pattern.exec(source.text);
+      if (!match) {
+        continue;
+      }
+      const raw = match[match.length - 1];
+      if (raw === undefined) {
+        continue;
+      }
+      const numeric = parseNumeric(raw);
+      if (numeric === undefined) {
+        continue;
+      }
+      const key = `${source.priority}:${numeric}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      results.push({
+        value: numeric,
+        priority: source.priority,
+      });
+    }
+  }
+  results.sort((a, b) => a.priority - b.priority);
+  return results.map((entry) => entry.value);
+}
+
+function tokenStartsWithKeyword(tokenLower: string, keyword: string): boolean {
+  if (!tokenLower.startsWith(keyword)) {
+    return false;
+  }
+  if (tokenLower.length === keyword.length) {
+    return true;
+  }
+  const next = tokenLower.charCodeAt(keyword.length);
+  return next < 97 || next > 122;
+}
+
+function matchesKeyword(tokenLower: string, keywords: readonly string[]): boolean {
+  for (const keyword of keywords) {
+    if (tokenLower === keyword) {
+      return true;
+    }
+    if (tokenStartsWithKeyword(tokenLower, keyword)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectScalarSources(text: string, tokens: readonly TokenSlice[]): {
+  readonly sizeSources: PatternSource[];
+  readonly entrySources: PatternSource[];
+  readonly leverageSources: PatternSource[];
+} {
+  const sizeKeywords = ["size", "qty", "quantity", "amount", "volume"] as const;
+  const entryKeywords = ["entry", "price"] as const;
+  const leverageKeywords = ["leverage", "lev"] as const;
+
+  const sizeSources: PatternSource[] = [];
+  const entrySources: PatternSource[] = [];
+  const leverageSources: PatternSource[] = [];
+
+  for (const token of tokens) {
+    if (!token.raw) {
+      continue;
+    }
+    const trailingSlice = limitValueSlice(text.slice(token.end));
+    const combinedSlice = limitValueSlice(text.slice(token.start));
+
+    if (token.clean && matchesKeyword(token.lower, sizeKeywords)) {
+      addPatternSource(sizeSources, token.raw, token.start);
+      addPatternSource(sizeSources, combinedSlice, token.start);
+      addPatternSource(sizeSources, trailingSlice, token.end);
+    }
+
+    if (matchesKeyword(token.lower, entryKeywords)) {
+      addPatternSource(entrySources, token.raw, token.start);
+      addPatternSource(entrySources, combinedSlice, token.start);
+      addPatternSource(entrySources, trailingSlice, token.end);
+    }
+
+    if (token.raw.startsWith("@")) {
+      addPatternSource(entrySources, token.raw, token.start);
+    }
+
+    if (token.clean && matchesKeyword(token.lower, leverageKeywords)) {
+      addPatternSource(leverageSources, token.raw, token.start);
+      addPatternSource(leverageSources, combinedSlice, token.start);
+      addPatternSource(leverageSources, trailingSlice, token.end);
+    }
+
+    if (/[0-9]/.test(token.raw) && /(x$|x[^a-z])/i.test(token.raw)) {
+      addPatternSource(leverageSources, token.raw, token.start);
+    }
+  }
+
+  return {
+    sizeSources,
+    entrySources,
+    leverageSources,
+  };
+}
+
+const TAKE_PROFIT_TOKEN_SINGLE_PATTERN = /^(?:tp\d*|tp|take\s*profit\d*|take\s*profit|target\d*|target)$/i;
+const STOP_LEVEL_TOKEN_SINGLE_PATTERN = /^(?:sl\d*|stoploss\d*|stoplosses\d*|stop(?:\s*loss(?:es)?)?\d*|psl\d*)$/i;
+const LEVEL_TOKEN_PATTERN = /\b(?:tp\d*|tp|take\s*profit\d*|take\s*profit|target\d*|target|sl\d*|stoploss\d*|stoplosses\d*|stop(?:\s*loss(?:es)?)?\d*|psl\d*)\b/gi;
+
+function collectLevelMatches(text: string): {
+  readonly takeProfits: TakeProfitLevel[];
+  readonly stopLosses: StopLossLevel[];
+} {
+  const takeProfits: TakeProfitLevel[] = [];
+  const stopLosses: StopLossLevel[] = [];
+  const seenTakeProfit = new Set<string>();
+  const seenStopLoss = new Set<string>();
+
+  LEVEL_TOKEN_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = LEVEL_TOKEN_PATTERN.exec(text)) !== null) {
+    const raw = match[0];
+    const slice = text.slice(match.index + raw.length);
+    const limited = limitValueSlice(slice);
+    const valueMatch = VALUE_WITH_PERCENT_PATTERN.exec(limited);
+    if (!valueMatch) {
+      continue;
+    }
+    const price = parseNumeric(valueMatch[1]);
+    if (price === undefined) {
+      continue;
+    }
+    const fraction = extractFractionFromSlice(limited, valueMatch[2]);
+    const label = normalizeLevelLabel(raw);
+    const key = `${label ?? ""}:${price}:${fraction ?? ""}`;
+    if (TAKE_PROFIT_TOKEN_SINGLE_PATTERN.test(raw)) {
+      if (seenTakeProfit.has(key)) {
+        continue;
+      }
+      takeProfits.push({
+        price,
+        sizeFraction: fraction,
+        label,
+      });
+      seenTakeProfit.add(key);
+      continue;
+    }
+    if (STOP_LEVEL_TOKEN_SINGLE_PATTERN.test(raw)) {
+      if (seenStopLoss.has(key)) {
+        continue;
+      }
+      stopLosses.push({
+        price,
+        sizeFraction: fraction,
+        label,
+      });
+      seenStopLoss.add(key);
+    }
+  }
+
+  return {
+    takeProfits,
+    stopLosses,
+  };
 }
 
 function limitValueSlice(slice: string): string {
@@ -406,91 +624,6 @@ function extractEntryStrategy(text: string): EntryStrategy | undefined {
   return strategies[0];
 }
 
-function extractSingle(text: string, patterns: RegExp[]): number | undefined {
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    const match = pattern.exec(text);
-    if (match) {
-      const raw = match[match.length - 1];
-      if (raw !== undefined) {
-        const numeric = parseNumeric(raw);
-        if (numeric !== undefined) {
-          return numeric;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
-function extractTakeProfitLevels(text: string): TakeProfitLevel[] {
-  const pattern = TAKE_PROFIT_TOKEN_PATTERN;
-  pattern.lastIndex = 0;
-  const levels: TakeProfitLevel[] = [];
-  const seen = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    const labelRaw = match[0];
-    const slice = text.slice(match.index + labelRaw.length);
-    const limited = limitValueSlice(slice);
-    const valueMatch = VALUE_WITH_PERCENT_PATTERN.exec(limited);
-    if (!valueMatch) {
-      continue;
-    }
-    const price = parseNumeric(valueMatch[1]);
-    if (price === undefined) {
-      continue;
-    }
-    const fraction = extractFractionFromSlice(limited, valueMatch[2]);
-    const label = normalizeLevelLabel(labelRaw);
-    const key = `${label ?? ""}:${price}:${fraction ?? ""}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    levels.push({
-      price,
-      sizeFraction: fraction,
-      label,
-    });
-    seen.add(key);
-  }
-  return levels;
-}
-
-function extractStopLevels(text: string): StopLossLevel[] {
-  const pattern = STOP_LEVEL_TOKEN_PATTERN;
-  pattern.lastIndex = 0;
-  const levels: StopLossLevel[] = [];
-  const seen = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    const raw = match[0];
-    const slice = text.slice(match.index + raw.length);
-    const limited = limitValueSlice(slice);
-    const valueMatch = VALUE_WITH_PERCENT_PATTERN.exec(limited);
-    if (!valueMatch) {
-      continue;
-    }
-    const price = parseNumeric(valueMatch[1]);
-    if (price === undefined) {
-      continue;
-    }
-    const fraction = extractFractionFromSlice(limited, valueMatch[2]);
-    const label = normalizeLevelLabel(raw);
-    const key = `${label ?? ""}:${price}:${fraction ?? ""}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    levels.push({
-      price,
-      sizeFraction: fraction,
-      label,
-    });
-    seen.add(key);
-  }
-  return levels;
-}
-
 function normalizeRiskDescriptor(raw: string | undefined): RiskLabel | undefined {
   if (!raw) {
     return undefined;
@@ -564,7 +697,7 @@ function normalizeTimeframeToken(token: string): string | undefined {
   return undefined;
 }
 
-function extractTimeframeHints(text: string, tokens: readonly string[]): string[] {
+function extractTimeframeHints(text: string, tokens: readonly TokenSlice[]): string[] {
   const hints = new Set<string>();
 
   let match: RegExpExecArray | null;
@@ -599,7 +732,7 @@ function extractTimeframeHints(text: string, tokens: readonly string[]): string[
     }
   }
 
-  const lowerTokens = tokens.map((token) => token.toLowerCase());
+  const lowerTokens = tokens.map((token) => token.lower).filter(Boolean);
   for (let i = 0; i < lowerTokens.length; ++i) {
     const token = lowerTokens[i];
     const normalized = normalizeTimeframeToken(token);
@@ -643,13 +776,16 @@ export function parseTradeSignal(text: string): TradeSignal {
     throw new TradeSignalParseError("Signal text is empty");
   }
 
-  const tokens = trimmed.split(SPLIT_REGEX).map((token) => cleanToken(token)).filter(Boolean);
+  const trailingStopMatch = extractTrailingStop(trimmed);
+  const analysisText = trailingStopMatch?.sanitizedText ?? trimmed;
+  const tokenSlices = tokenizeSignalText(analysisText);
+  const tokens = tokenSlices.map((token) => token.clean).filter(Boolean);
   if (tokens.length === 0) {
     throw new TradeSignalParseError("Signal does not contain recognizable tokens");
   }
 
   const riskLabel = extractRiskLabel(trimmed);
-  const timeframeHints = extractTimeframeHints(trimmed, tokens);
+  const timeframeHints = extractTimeframeHints(trimmed, tokenSlices);
 
   let side: TradeSide | undefined;
   let sideIndex = -1;
@@ -711,8 +847,13 @@ export function parseTradeSignal(text: string): TradeSignal {
     throw new TradeSignalParseError(`Invalid trading symbol "${rawSymbol}"`);
   }
 
-  let size = extractSingle(trimmed, SIZE_PATTERNS);
-  let entryPrice = extractSingle(trimmed, ENTRY_PATTERNS);
+  const { sizeSources, entrySources, leverageSources } = collectScalarSources(analysisText, tokenSlices);
+  const sizeCandidates = collectNumericValues(SIZE_PATTERNS, sizeSources);
+  const entryCandidates = collectNumericValues(ENTRY_PATTERNS, entrySources);
+  const leverageCandidates = collectNumericValues(LEVERAGE_PATTERNS, leverageSources);
+
+  let size = sizeCandidates[0];
+  let entryPrice = entryCandidates[0];
   if (size === undefined) {
     for (let i = sideIndex + 1; i < tokens.length; ++i) {
       const token = tokens[i];
@@ -746,12 +887,10 @@ export function parseTradeSignal(text: string): TradeSignal {
     execution = "market";
   }
 
-  const trailingStopMatch = extractTrailingStop(trimmed);
-  const stopScanText = trailingStopMatch?.sanitizedText ?? trimmed;
-  const stopLossLevels = extractStopLevels(stopScanText);
+  const stopScanText = analysisText;
+  const { takeProfits, stopLosses: stopLossLevels } = collectLevelMatches(stopScanText);
   const stopLoss = stopLossLevels[0]?.price;
-  const takeProfits = extractTakeProfitLevels(trimmed);
-  const leverage = extractSingle(trimmed, LEVERAGE_PATTERNS);
+  const leverage = leverageCandidates[0];
   const trailingStop = trailingStopMatch?.config;
   const entryStrategy: EntryStrategy = extractEntryStrategy(trimmed) ?? { type: "single" };
 
