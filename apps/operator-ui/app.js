@@ -5,6 +5,19 @@ const orderList = document.querySelector('#order-list');
 const orderFilter = document.querySelector('#order-filter');
 const connectionPill = document.querySelector('#connection-pill');
 const helpPanel = document.querySelector('#help-panel');
+const operationsSummary = document.querySelector('#operations-summary');
+const operationsCaption = document.querySelector('[data-role="operations-caption"]');
+const operationsEmpty = document.querySelector('#operations-empty');
+const ordersFilterWrapper = document.querySelector('[data-role="orders-filter"]');
+const segmentedButtons = Array.from(
+  document.querySelectorAll('[data-role="segmented-button"]'),
+);
+const operationsLists = {
+  pipelines: pipelineList,
+  trackers: trackerList,
+  orders: orderList,
+};
+let activeOperationsView = 'pipelines';
 
 const summaryData = [
   {
@@ -89,6 +102,8 @@ const orderData = [
     action: 'Расследовать',
   },
 ];
+
+let latestFilteredOrders = orderData;
 
 const signalPipelineData = [
   {
@@ -384,6 +399,82 @@ function renderSummary() {
   });
 }
 
+function renderOperationsSummary() {
+  if (!operationsSummary) {
+    return;
+  }
+
+  let summaryText = '';
+  let emptyText = '';
+  let visibleCount = 0;
+
+  if (activeOperationsView === 'pipelines') {
+    const total = signalPipelineData.length;
+    const ready = signalPipelineData.filter((item) => item.status === 'ready').length;
+    const blocked = signalPipelineData.filter((item) => item.status === 'blocked').length;
+    summaryText =
+      total === 0
+        ? 'Очередь сигналов пуста.'
+        : `${total} сигнал(ов) • ${ready} готово • ${blocked} заблокировано`;
+    emptyText = 'Очередь сигналов пуста — ожидаем новые идеи.';
+    visibleCount = total;
+    if (operationsCaption) {
+      operationsCaption.textContent = 'Контролируйте поток сигналов до запуска в работу.';
+    }
+  } else if (activeOperationsView === 'trackers') {
+    const total = trackerData.length;
+    const critical = trackerData.filter((item) => item.level === 'critical').length;
+    const warning = trackerData.filter((item) => item.level === 'warning').length;
+    summaryText =
+      total === 0
+        ? 'Нет активных трекеров.'
+        : `${total} трекеров • ${critical} критических • ${warning} требуют внимания`;
+    emptyText = 'Трекеры не запущены — загрузите сигнал, чтобы создать новый.';
+    visibleCount = total;
+    if (operationsCaption) {
+      operationsCaption.textContent = 'Следите за состоянием активных трекеров и управляйте ими.';
+    }
+  } else {
+    const total = latestFilteredOrders.length;
+    const attention = latestFilteredOrders.filter((item) => item.level !== 'ok').length;
+    summaryText =
+      total === 0
+        ? 'Нет заказов под выбранным фильтром.'
+        : `${total} заказов • ${attention} требуют внимания`;
+    emptyText = 'Заказы по выбранному фильтру не найдены.';
+    visibleCount = total;
+    if (operationsCaption) {
+      operationsCaption.textContent = 'Контроль исполнения ордеров и быстрые действия по ним.';
+    }
+  }
+
+  operationsSummary.textContent = summaryText;
+  if (operationsEmpty) {
+    operationsEmpty.textContent = emptyText;
+    operationsEmpty.hidden = visibleCount > 0;
+  }
+  if (ordersFilterWrapper) {
+    ordersFilterWrapper.hidden = activeOperationsView !== 'orders';
+  }
+}
+
+function setActiveOperationsView(view) {
+  if (!view || !Object.prototype.hasOwnProperty.call(operationsLists, view)) {
+    return;
+  }
+  activeOperationsView = view;
+  Object.entries(operationsLists).forEach(([key, list]) => {
+    if (!list) {
+      return;
+    }
+    list.hidden = key !== view;
+  });
+  segmentedButtons.forEach((button) => {
+    button.classList.toggle('segmented__button--active', button.dataset.view === view);
+  });
+  renderOperationsSummary();
+}
+
 function createActionButton({ intent, label, variant, dataset }) {
   const button = document.createElement('button');
   configureActionButton(button, { intent, label, variant, dataset });
@@ -475,6 +566,9 @@ function renderTrackers() {
     create: createTrackerElement,
     update: updateTrackerElement,
   });
+  if (activeOperationsView === 'trackers') {
+    renderOperationsSummary();
+  }
 }
 
 function handleTrackerAction(trackerId, intent) {
@@ -596,11 +690,15 @@ function renderOrders() {
   } else if (activeOrderFilter === 'attention') {
     filtered = orderData.filter((order) => order.level !== 'ok');
   }
+  latestFilteredOrders = filtered;
   syncList(orderList, filtered, {
     key: (item) => item.id,
     create: createOrderElement,
     update: updateOrderElement,
   });
+  if (activeOperationsView === 'orders') {
+    renderOperationsSummary();
+  }
 }
 
 function handleOrderAction(orderId, button) {
@@ -723,6 +821,9 @@ function renderPipeline() {
     create: createPipelineElement,
     update: updatePipelineElement,
   });
+  if (activeOperationsView === 'pipelines') {
+    renderOperationsSummary();
+  }
 }
 
 function handlePipelineAction(pipelineId, intent) {
@@ -922,6 +1023,13 @@ document.querySelectorAll('.toggle').forEach((button) => {
   });
 });
 
+segmentedButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const view = button.dataset.view ?? '';
+    setActiveOperationsView(view);
+  });
+});
+
 document.querySelectorAll('.quick-actions button').forEach((button) => {
   button.addEventListener('click', () => {
     handleQuickAction(button.dataset.action ?? '');
@@ -963,6 +1071,7 @@ renderTrackers();
 renderOrders();
 renderPipeline();
 renderSummary();
+setActiveOperationsView('pipelines');
 
 setInterval(() => {
   if (!isConnectionOffline) {

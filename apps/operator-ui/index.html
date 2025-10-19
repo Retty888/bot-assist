@@ -20,49 +20,91 @@
     </header>
 
     <main class="layout">
-      <section class="layout__column layout__column--left">
+      <section class="stack stack--sidebar">
         <article class="card summary">
           <h2>Сводка статусов</h2>
           <ul class="summary-list" id="summary-list"></ul>
         </article>
 
-        <article class="card pipeline">
-          <h2>Потенциальные сигналы</h2>
-          <p class="caption">
-            Контроль воронки до запуска: проверяйте ревью, блокировки и готовые пресеты.
-          </p>
-          <ul class="pipeline-list" id="pipeline-list"></ul>
-        </article>
-
         <article class="card quick-actions">
-          <h2>Быстрые действия</h2>
+          <h2>Быстрое управление</h2>
+          <p class="caption">Триггеры для моментальных действий с ботом.</p>
           <div class="quick-actions__grid">
-            <button data-action="refresh-signals">Обновить сигналы</button>
-            <button data-action="pause-automation">Пауза автоматизации</button>
-            <button data-action="resolve-alerts">Закрыть алерты</button>
-            <button data-action="new-manual-order">Ручной ордер</button>
+            <button class="chip" data-action="refresh-signals">Синхронизация сигналов</button>
+            <button class="chip" data-action="pause-automation">Пауза автоматизации</button>
+            <button class="chip" data-action="resolve-alerts">Закрыть алерты</button>
+            <button class="chip" data-action="new-manual-order">Ручной ордер</button>
           </div>
-          <p class="helper-text">
-            Основные операции доступны здесь — без переходов по меню.
-          </p>
-        </article>
-
-        <article class="card trackers">
-          <h2>Мониторинг трекеров</h2>
-          <ul class="tracker-list" id="tracker-list"></ul>
         </article>
       </section>
 
-      <section class="layout__column layout__column--right">
+      <section class="stack stack--main">
+        <article class="card operations">
+          <header class="card__header operations__header">
+            <div>
+              <h2>Оперативная панель</h2>
+              <p class="caption" data-role="operations-caption">
+                Контролируйте очередь сигналов, активные трекеры и заказы в одном окне.
+              </p>
+            </div>
+            <div class="segmented" role="tablist">
+              <button
+                class="segmented__button segmented__button--active"
+                type="button"
+                role="tab"
+                data-role="segmented-button"
+                data-view="pipelines"
+              >
+                Сигналы
+              </button>
+              <button
+                class="segmented__button"
+                type="button"
+                role="tab"
+                data-role="segmented-button"
+                data-view="trackers"
+              >
+                Трекеры
+              </button>
+              <button
+                class="segmented__button"
+                type="button"
+                role="tab"
+                data-role="segmented-button"
+                data-view="orders"
+              >
+                Заказы
+              </button>
+            </div>
+          </header>
+          <div class="operations__toolbar">
+            <div class="operations__summary" id="operations-summary"></div>
+            <label class="operations__filter" data-role="orders-filter" hidden>
+              <span>Фильтр</span>
+              <select id="order-filter">
+                <option value="all">Все</option>
+                <option value="active">Активные</option>
+                <option value="attention">Требуют внимания</option>
+              </select>
+            </label>
+          </div>
+          <div class="operations__lists">
+            <ul class="compact-list pipeline-list" id="pipeline-list"></ul>
+            <ul class="compact-list tracker-list" id="tracker-list" hidden></ul>
+            <ul class="compact-list order-list" id="order-list" hidden></ul>
+          </div>
+          <p class="empty-state" id="operations-empty" hidden></p>
+        </article>
+
         <article class="card form-card">
           <header class="card__header">
             <div>
               <h2>Загрузка сигнала</h2>
               <p class="caption">
-                Заполните основное и при необходимости раскройте дополнительные параметры.
+                Введите ключевые параметры, дополнительные опции доступны по требованию.
               </p>
             </div>
-            <button class="toggle" data-target="advanced-fields">Раскрыть доп. опции</button>
+            <button class="toggle" type="button" data-target="advanced-fields">Раскрыть доп. опции</button>
           </header>
           <form class="form" id="signal-form">
             <label>
@@ -89,7 +131,7 @@
               <legend>Продвинутые настройки</legend>
               <label>
                 Комментарий оператора
-                <textarea name="notes" rows="3" placeholder="Контекст для команды" ></textarea>
+                <textarea name="notes" rows="3" placeholder="Контекст для команды"></textarea>
               </label>
 
               <label>
@@ -104,37 +146,17 @@
             </div>
           </form>
         </article>
-
-        <article class="card orders">
-          <header class="card__header">
-            <div>
-              <h2>Статусы заказов</h2>
-              <p class="caption">Последние изменения и приоритетные инциденты отображаются сверху.</p>
-            </div>
-            <div class="filters">
-              <label>
-                <span>Фильтр</span>
-                <select id="order-filter">
-                  <option value="all">Все</option>
-                  <option value="active">Активные</option>
-                  <option value="attention">Требуют внимания</option>
-                </select>
-              </label>
-            </div>
-          </header>
-          <ul class="order-list" id="order-list"></ul>
-        </article>
       </section>
     </main>
 
     <aside class="help-panel" id="help-panel" hidden>
       <h2>Справка и onboarding</h2>
       <ol>
-        <li>Проверьте сводку статусов — красные индикаторы требуют внимания.</li>
-        <li>Оцените карточку «Потенциальные сигналы»: статус и время обновления подскажут, что запускать в первую очередь.</li>
-        <li>Используйте быстрые действия для моментальных ответов без потери контекста.</li>
-        <li>Для новых сигналов заполните основную часть формы, доп. настройки открываются по требованию.</li>
-        <li>В списке заказов отметки «⚠» показывают причины остановки — кликните для подробностей.</li>
+        <li>Начните со сводки — критические индикаторы и задержки выделены цветом.</li>
+        <li>На оперативной панели переключайтесь между сигналами, трекерами и заказами с помощью сегментных кнопок.</li>
+        <li>Быстрые переключатели помогают мгновенно синхронизировать сигналы, поставить паузу или открыть форму ордера.</li>
+        <li>Для новых сигналов заполните основную часть формы, дополнительные параметры скрыты в блоке «Раскрыть доп. опции».</li>
+        <li>Фильтр заказов доступен на вкладке «Заказы» — используйте его для фокуса на критичных исполнениях.</li>
       </ol>
       <button class="ghost" data-action="close-help">Закрыть</button>
     </aside>
