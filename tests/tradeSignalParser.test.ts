@@ -159,6 +159,35 @@ Titan Vault (https://www.trysuper.co/trader/0x4b0eab9444a75a03f1ef340c8beac737af
     expect(signal.takeProfits[1].sizeFraction).toBeCloseTo(0.7, 5);
   });
 
+  it("handles dense numeric signals with mixed timeframe formats", () => {
+    const text = [
+      "Long BTC size:7.5 entry=42150.5",
+      "sl1 41000 40%",
+      "stoploss2 40500 60 percent",
+      "tp1 43000 25%",
+      "target2 44200 35 percent",
+      "take profit3 45550 40%",
+      "timeframe 45 minutes tf 2h plan 3day weekly outlook swing",
+    ].join(" ");
+
+    const signal = parseTradeSignal(text);
+
+    expect(signal.size).toBeCloseTo(7.5);
+    expect(signal.entryPrice).toBeCloseTo(42150.5);
+    expect(signal.stopLosses).toHaveLength(2);
+    expect(signal.stopLosses[0]).toMatchObject({ price: 41000, sizeFraction: 0.4 });
+    expect(signal.stopLosses[1]).toMatchObject({ price: 40500, sizeFraction: 0.6 });
+    expect(signal.takeProfits.map((tp) => tp.price)).toEqual([43000, 44200, 45550]);
+    expect(signal.takeProfits.map((tp) => tp.sizeFraction)).toEqual([
+      0.25,
+      0.35,
+      0.4,
+    ]);
+    expect(signal.timeframeHints).toEqual(
+      expect.arrayContaining(["45m", "2h", "3d", "1w", "swing"]),
+    );
+  });
+
   it("supports property based take profit fraction parsing", () => {
     const takeProfitArb = fc
       .array(
