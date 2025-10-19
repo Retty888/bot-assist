@@ -178,31 +178,77 @@ const RELATIVE_TIME_DIVISIONS = [
   { amount: Number.POSITIVE_INFINITY, unit: 'year' },
 ];
 
-function renderList(target, items, renderer) {
+/**
+ * Declarative list synchroniser. Each item is matched by a stable key (data-id)
+ * and the DOM element is updated in-place via the provided updater. Updaters
+ * must assign `element.dataset.id` so the diff can reuse nodes. This keeps
+ * event delegation intact and avoids recreating frequently updated nodes.
+ */
+function syncList(target, items, { key, create, update }) {
   if (!target) return;
-  target.innerHTML = '';
+  const existing = new Map(
+    Array.from(target.children).map((child) => [child.dataset.id, child]),
+  );
   const fragment = document.createDocumentFragment();
   items.forEach((item) => {
-    fragment.appendChild(renderer(item));
+    const id = key(item);
+    let element = existing.get(id);
+    if (!element) {
+      element = create(item);
+    } else {
+      existing.delete(id);
+    }
+    update(element, item);
+    fragment.appendChild(element);
   });
-  target.appendChild(fragment);
+  target.replaceChildren(fragment);
+}
+
+function updateStatusDot(dot, level) {
+  if (!dot) return;
+  dot.className = 'status-dot';
+  if (level === 'warning') dot.classList.add('warning');
+  if (level === 'critical') dot.classList.add('critical');
 }
 
 function createStatusDot(level) {
   const dot = document.createElement('span');
   dot.classList.add('status-dot');
-  if (level === 'warning') dot.classList.add('warning');
-  if (level === 'critical') dot.classList.add('critical');
+  updateStatusDot(dot, level);
   return dot;
+}
+
+function updateBadge(badge, level) {
+  if (!badge) return;
+  badge.className = 'badge';
+  if (level === 'ok') badge.classList.add('badge--success');
+  if (level === 'warning') badge.classList.add('badge--warning');
+  if (level === 'critical') badge.classList.add('badge--critical');
 }
 
 function createBadge(level) {
   const badge = document.createElement('span');
   badge.classList.add('badge');
-  if (level === 'ok') badge.classList.add('badge--success');
-  if (level === 'warning') badge.classList.add('badge--warning');
-  if (level === 'critical') badge.classList.add('badge--critical');
+  updateBadge(badge, level);
   return badge;
+}
+
+function configureActionButton(button, { intent, label, variant, dataset }) {
+  button.className = 'ghost compact';
+  if (variant) {
+    button.classList.add(variant);
+  }
+  button.dataset.intent = intent;
+  const preservedKeys = new Set(Object.keys(dataset ?? {}));
+  Object.keys(button.dataset).forEach((key) => {
+    if (key !== 'intent' && !preservedKeys.has(key)) {
+      delete button.dataset[key];
+    }
+  });
+  Object.entries(dataset ?? {}).forEach(([key, value]) => {
+    button.dataset[key] = value;
+  });
+  button.textContent = label;
 }
 
 function levelToText(level) {
@@ -287,87 +333,148 @@ function updateSummaryFromState() {
   }
 }
 
-function renderSummaryItem(item) {
+function createSummaryElement() {
   const li = document.createElement('li');
-  li.dataset.level = item.level;
 
   const meta = document.createElement('div');
   meta.classList.add('order-description');
-  meta.innerHTML = `<strong>${item.label}</strong><br /><span>${item.description}</span>`;
+  const label = document.createElement('strong');
+  label.dataset.role = 'summary-label';
+  const description = document.createElement('span');
+  description.dataset.role = 'summary-description';
+  meta.append(label, document.createElement('br'), description);
 
   const value = document.createElement('div');
   value.classList.add('order-meta');
-  value.append(createStatusDot(item.level));
-  value.append(document.createTextNode(item.value));
+  const dot = createStatusDot('ok');
+  dot.dataset.role = 'status-dot';
+  const valueText = document.createElement('span');
+  valueText.dataset.role = 'summary-value';
+  value.append(dot, valueText);
 
   li.append(meta, value);
   return li;
 }
 
+function updateSummaryElement(element, item) {
+  element.dataset.id = item.id;
+  element.dataset.level = item.level;
+  const label = element.querySelector('[data-role="summary-label"]');
+  if (label) {
+    label.textContent = item.label;
+  }
+  const description = element.querySelector('[data-role="summary-description"]');
+  if (description) {
+    description.textContent = item.description;
+  }
+  const value = element.querySelector('[data-role="summary-value"]');
+  if (value) {
+    value.textContent = item.value;
+  }
+  const dot = element.querySelector('[data-role="status-dot"]');
+  updateStatusDot(dot, item.level);
+}
+
 function renderSummary() {
   updateSummaryFromState();
-  renderList(summaryList, summaryData, renderSummaryItem);
+  syncList(summaryList, summaryData, {
+    key: (item) => item.id,
+    create: createSummaryElement,
+    update: updateSummaryElement,
+  });
 }
 
 function createActionButton({ intent, label, variant, dataset }) {
   const button = document.createElement('button');
-  button.classList.add('ghost', 'compact');
-  if (variant) {
-    button.classList.add(variant);
-  }
-  button.dataset.intent = intent;
-  Object.entries(dataset ?? {}).forEach(([key, value]) => {
-    button.dataset[key] = value;
-  });
-  button.textContent = label;
+  configureActionButton(button, { intent, label, variant, dataset });
   return button;
 }
 
-function renderTrackerItem(item) {
+function createTrackerElement() {
   const li = document.createElement('li');
-  li.dataset.level = item.level;
-  li.dataset.trackerId = item.id;
 
   const details = document.createElement('div');
   details.classList.add('tracker-details');
 
   const meta = document.createElement('div');
   meta.classList.add('order-description');
-  meta.innerHTML = `<strong>${item.name}</strong><br /><span>${item.nextEvent}</span>`;
+  const name = document.createElement('strong');
+  name.dataset.role = 'tracker-name';
+  const next = document.createElement('span');
+  next.dataset.role = 'tracker-next';
+  meta.append(name, document.createElement('br'), next);
 
-  const badge = createBadge(item.level);
-  badge.textContent = item.status;
+  const badge = createBadge('ok');
+  badge.dataset.role = 'tracker-status';
 
   details.append(meta, badge);
 
   const controls = document.createElement('div');
   controls.classList.add('tracker-controls');
-
-  (item.actions ?? []).forEach((action) => {
-    const button = createActionButton({
-      intent: action.intent,
-      label: action.label,
-      variant: action.variant,
-      dataset: { trackerId: item.id, role: 'tracker-action' },
-    });
-    controls.append(button);
-  });
+  controls.dataset.role = 'tracker-controls';
 
   li.append(details, controls);
   return li;
 }
 
-function renderTrackers() {
-  renderList(trackerList, trackerData, renderTrackerItem);
-  trackerList
-    ?.querySelectorAll('button[data-role="tracker-action"]')
-    .forEach((button) => {
-      button.addEventListener('click', () => {
-        const trackerId = button.dataset.trackerId ?? '';
-        const intent = button.dataset.intent ?? '';
-        handleTrackerAction(trackerId, intent);
+function updateTrackerElement(element, item) {
+  element.dataset.id = item.id;
+  element.dataset.trackerId = item.id;
+  element.dataset.level = item.level;
+
+  const name = element.querySelector('[data-role="tracker-name"]');
+  if (name) {
+    name.textContent = item.name;
+  }
+  const next = element.querySelector('[data-role="tracker-next"]');
+  if (next) {
+    next.textContent = item.nextEvent;
+  }
+  const badge = element.querySelector('[data-role="tracker-status"]');
+  if (badge) {
+    badge.textContent = item.status;
+    updateBadge(badge, item.level);
+  }
+
+  const controls = element.querySelector('[data-role="tracker-controls"]');
+  const actions = item.actions ?? [];
+  if (controls) {
+    const existingButtons = Array.from(
+      controls.querySelectorAll('button[data-role="tracker-action"]'),
+    );
+    if (existingButtons.length !== actions.length) {
+      const fragment = document.createDocumentFragment();
+      actions.forEach((action) => {
+        fragment.appendChild(
+          createActionButton({
+            intent: action.intent,
+            label: action.label,
+            variant: action.variant,
+            dataset: { trackerId: item.id, role: 'tracker-action' },
+          }),
+        );
       });
-    });
+      controls.replaceChildren(fragment);
+    } else {
+      actions.forEach((action, index) => {
+        const button = existingButtons[index];
+        configureActionButton(button, {
+          intent: action.intent,
+          label: action.label,
+          variant: action.variant,
+          dataset: { trackerId: item.id, role: 'tracker-action' },
+        });
+      });
+    }
+  }
+}
+
+function renderTrackers() {
+  syncList(trackerList, trackerData, {
+    key: (item) => item.id,
+    create: createTrackerElement,
+    update: updateTrackerElement,
+  });
 }
 
 function handleTrackerAction(trackerId, intent) {
@@ -413,39 +520,73 @@ function handleTrackerAction(trackerId, intent) {
   renderSummary();
 }
 
-function renderOrderItem(item) {
+function createOrderElement() {
   const li = document.createElement('li');
-  li.dataset.level = item.level;
 
   const description = document.createElement('div');
   description.classList.add('order-description');
-  description.innerHTML = `<strong>${item.id}</strong><br /><span>${item.description}</span>`;
+  const title = document.createElement('strong');
+  title.dataset.role = 'order-title';
+  const details = document.createElement('span');
+  details.dataset.role = 'order-description';
+  description.append(title, document.createElement('br'), details);
 
   const meta = document.createElement('div');
   meta.classList.add('order-meta');
-  const badge = createBadge(item.level);
-  badge.textContent = levelToText(item.level);
+  const badge = createBadge('ok');
+  badge.dataset.role = 'order-badge';
   const time = document.createElement('time');
-  time.dateTime = item.updatedAt;
-  const relative = formatRelativeTime(item.updatedAt);
-  const absolute = formatAbsoluteTime(item.updatedAt);
-  time.textContent = relative || absolute;
-  if (absolute) {
-    time.title = absolute;
-    time.setAttribute('aria-label', `Обновлено ${absolute}`);
-  }
+  time.dataset.role = 'order-time';
   const actionButton = createActionButton({
     intent: 'order-action',
-    label: item.action,
-    dataset: { orderId: item.id },
+    label: '',
+    dataset: { orderId: '', role: 'order-action' },
   });
-  actionButton.addEventListener('click', () => {
-    window.alert(`Действие «${item.action}» по заказу ${item.id}`);
-  });
-
   meta.append(badge, time, actionButton);
+
   li.append(description, meta);
   return li;
+}
+
+function updateOrderElement(element, item) {
+  element.dataset.id = item.id;
+  element.dataset.level = item.level;
+
+  const title = element.querySelector('[data-role="order-title"]');
+  if (title) {
+    title.textContent = item.id;
+  }
+  const description = element.querySelector('[data-role="order-description"]');
+  if (description) {
+    description.textContent = item.description;
+  }
+  const badge = element.querySelector('[data-role="order-badge"]');
+  if (badge) {
+    badge.textContent = levelToText(item.level);
+    updateBadge(badge, item.level);
+  }
+  const timeEl = element.querySelector('[data-role="order-time"]');
+  if (timeEl) {
+    timeEl.dateTime = item.updatedAt;
+    const relative = formatRelativeTime(item.updatedAt);
+    const absolute = formatAbsoluteTime(item.updatedAt);
+    timeEl.textContent = relative || absolute;
+    if (absolute) {
+      timeEl.title = absolute;
+      timeEl.setAttribute('aria-label', `Обновлено ${absolute}`);
+    } else {
+      timeEl.removeAttribute('title');
+      timeEl.removeAttribute('aria-label');
+    }
+  }
+  const actionButton = element.querySelector('[data-role="order-action"]');
+  if (actionButton) {
+    configureActionButton(actionButton, {
+      intent: 'order-action',
+      label: item.action,
+      dataset: { orderId: item.id, role: 'order-action' },
+    });
+  }
 }
 
 function renderOrders() {
@@ -455,7 +596,21 @@ function renderOrders() {
   } else if (activeOrderFilter === 'attention') {
     filtered = orderData.filter((order) => order.level !== 'ok');
   }
-  renderList(orderList, filtered, renderOrderItem);
+  syncList(orderList, filtered, {
+    key: (item) => item.id,
+    create: createOrderElement,
+    update: updateOrderElement,
+  });
+}
+
+function handleOrderAction(orderId, button) {
+  if (!orderId) {
+    return;
+  }
+  const order = orderData.find((item) => item.id === orderId);
+  const label = button?.textContent?.trim() || order?.action || '';
+  const actionLabel = label || 'Действие';
+  window.alert(`Действие «${actionLabel}» по заказу ${orderId}`);
 }
 
 function instantiateTrackerFromTemplate(template) {
@@ -465,64 +620,109 @@ function instantiateTrackerFromTemplate(template) {
   return clone;
 }
 
-function renderPipelineItem(item) {
+function createPipelineElement() {
   const li = document.createElement('li');
-  li.dataset.status = item.status;
 
   const meta = document.createElement('div');
   meta.classList.add('order-description');
-  meta.innerHTML = `<strong>${item.title}</strong><br /><span>${item.summary}</span><br /><span class="pipeline-next">${item.nextStep}</span>`;
+  const title = document.createElement('strong');
+  title.dataset.role = 'pipeline-title';
+  const summary = document.createElement('span');
+  summary.dataset.role = 'pipeline-summary';
+  const next = document.createElement('span');
+  next.classList.add('pipeline-next');
+  next.dataset.role = 'pipeline-next';
+  meta.append(title, document.createElement('br'), summary, document.createElement('br'), next);
 
-  const statusMeta = pipelineStatusMeta[item.status];
   const panel = document.createElement('div');
   panel.classList.add('pipeline-meta');
+  panel.dataset.role = 'pipeline-panel';
 
   const tag = document.createElement('span');
   tag.classList.add('tag');
-  if (statusMeta) {
-    tag.classList.add(`tag--${statusMeta.tone}`);
-    tag.textContent = statusMeta.label;
-  } else {
-    tag.textContent = 'Без статуса';
-  }
+  tag.dataset.role = 'pipeline-status-tag';
   panel.append(tag);
 
   const time = document.createElement('time');
-  time.dateTime = item.updatedAt;
-  const relative = formatRelativeTime(item.updatedAt);
-  const absolute = formatAbsoluteTime(item.updatedAt);
-  time.textContent = relative || absolute;
-  if (absolute) {
-    time.title = absolute;
-    time.setAttribute('aria-label', `Обновлено ${absolute}`);
-  }
+  time.dataset.role = 'pipeline-time';
   panel.append(time);
-
-  if (statusMeta) {
-    const button = createActionButton({
-      intent: statusMeta.actionIntent,
-      label: statusMeta.actionLabel,
-      variant: statusMeta.actionVariant,
-      dataset: { pipelineId: item.id, role: 'pipeline-action' },
-    });
-    panel.append(button);
-  }
 
   li.append(meta, panel);
   return li;
 }
 
+function updatePipelineElement(element, item) {
+  element.dataset.id = item.id;
+  element.dataset.status = item.status;
+
+  const title = element.querySelector('[data-role="pipeline-title"]');
+  if (title) {
+    title.textContent = item.title;
+  }
+  const summary = element.querySelector('[data-role="pipeline-summary"]');
+  if (summary) {
+    summary.textContent = item.summary;
+  }
+  const next = element.querySelector('[data-role="pipeline-next"]');
+  if (next) {
+    next.textContent = item.nextStep;
+  }
+
+  const statusMeta = pipelineStatusMeta[item.status];
+  const tag = element.querySelector('[data-role="pipeline-status-tag"]');
+  if (tag) {
+    tag.className = 'tag';
+    if (statusMeta) {
+      tag.classList.add(`tag--${statusMeta.tone}`);
+      tag.textContent = statusMeta.label;
+    } else {
+      tag.textContent = 'Без статуса';
+    }
+  }
+
+  const timeEl = element.querySelector('[data-role="pipeline-time"]');
+  if (timeEl) {
+    timeEl.dateTime = item.updatedAt;
+    const relative = formatRelativeTime(item.updatedAt);
+    const absolute = formatAbsoluteTime(item.updatedAt);
+    timeEl.textContent = relative || absolute;
+    if (absolute) {
+      timeEl.title = absolute;
+      timeEl.setAttribute('aria-label', `Обновлено ${absolute}`);
+    } else {
+      timeEl.removeAttribute('title');
+      timeEl.removeAttribute('aria-label');
+    }
+  }
+
+  const panel = element.querySelector('[data-role="pipeline-panel"]');
+  if (panel) {
+    let actionButton = panel.querySelector('[data-role="pipeline-action"]');
+    if (statusMeta) {
+      const config = {
+        intent: statusMeta.actionIntent,
+        label: statusMeta.actionLabel,
+        variant: statusMeta.actionVariant,
+        dataset: { pipelineId: item.id, role: 'pipeline-action' },
+      };
+      if (!actionButton) {
+        actionButton = createActionButton(config);
+        panel.append(actionButton);
+      } else {
+        configureActionButton(actionButton, config);
+      }
+    } else if (actionButton) {
+      actionButton.remove();
+    }
+  }
+}
+
 function renderPipeline() {
-  renderList(pipelineList, signalPipelineData, renderPipelineItem);
-  pipelineList
-    ?.querySelectorAll('button[data-role="pipeline-action"]')
-    .forEach((button) => {
-      button.addEventListener('click', () => {
-        const pipelineId = button.dataset.pipelineId ?? '';
-        const intent = button.dataset.intent ?? '';
-        handlePipelineAction(pipelineId, intent);
-      });
-    });
+  syncList(pipelineList, signalPipelineData, {
+    key: (item) => item.id,
+    create: createPipelineElement,
+    update: updatePipelineElement,
+  });
 }
 
 function handlePipelineAction(pipelineId, intent) {
@@ -640,6 +840,50 @@ function handleQuickAction(action) {
   } else {
     window.alert(`Действие «${action}» пока не настроено.`);
   }
+}
+
+if (trackerList) {
+  trackerList.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const button = event.target.closest('[data-role="tracker-action"]');
+    if (!button || !trackerList.contains(button)) {
+      return;
+    }
+    const trackerId = button.dataset.trackerId ?? '';
+    const intent = button.dataset.intent ?? '';
+    handleTrackerAction(trackerId, intent);
+  });
+}
+
+if (pipelineList) {
+  pipelineList.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const button = event.target.closest('[data-role="pipeline-action"]');
+    if (!button || !pipelineList.contains(button)) {
+      return;
+    }
+    const pipelineId = button.dataset.pipelineId ?? '';
+    const intent = button.dataset.intent ?? '';
+    handlePipelineAction(pipelineId, intent);
+  });
+}
+
+if (orderList) {
+  orderList.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const button = event.target.closest('[data-role="order-action"]');
+    if (!button || !orderList.contains(button)) {
+      return;
+    }
+    const orderId = button.dataset.orderId ?? '';
+    handleOrderAction(orderId, button);
+  });
 }
 
 const form = document.querySelector('#signal-form');
