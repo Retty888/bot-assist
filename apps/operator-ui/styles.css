@@ -146,7 +146,8 @@ a {
 
 .summary-list,
 .tracker-list,
-.order-list {
+.order-list,
+.pipeline-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -157,7 +158,8 @@ a {
 
 .summary-list li,
 .tracker-list li,
-.order-list li {
+.order-list li,
+.pipeline-list li {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -180,6 +182,68 @@ a {
 .order-list li[data-level='warning'] {
   border-color: rgba(198, 101, 26, 0.38);
   background: rgba(198, 101, 26, 0.07);
+}
+
+.tracker-list li {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
+}
+
+.tracker-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.tracker-details .badge {
+  align-self: flex-start;
+}
+
+.tracker-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.tracker-controls button {
+  font-size: 0.72rem;
+  padding-inline: 0.6rem;
+}
+
+.pipeline-list li {
+  align-items: flex-start;
+}
+
+.pipeline-list li[data-status='ready'] {
+  border-color: rgba(31, 122, 70, 0.32);
+  background: rgba(31, 122, 70, 0.08);
+}
+
+.pipeline-list li[data-status='needsReview'] {
+  border-color: rgba(198, 101, 26, 0.38);
+  background: rgba(198, 101, 26, 0.07);
+}
+
+.pipeline-list li[data-status='blocked'] {
+  border-color: rgba(194, 59, 59, 0.38);
+  background: rgba(194, 59, 59, 0.08);
+}
+
+.pipeline-meta {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.pipeline-meta time {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .status-dot {
@@ -238,6 +302,38 @@ button.ghost {
   background: transparent;
   border-style: dashed;
   color: var(--text-muted);
+}
+
+button.ghost.compact {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.74rem;
+}
+
+button.ghost.success {
+  color: var(--success);
+  border-color: rgba(31, 122, 70, 0.35);
+}
+
+button.ghost.success:hover {
+  background: rgba(31, 122, 70, 0.12);
+}
+
+button.ghost.warning {
+  color: var(--warning);
+  border-color: rgba(198, 101, 26, 0.4);
+}
+
+button.ghost.warning:hover {
+  background: rgba(198, 101, 26, 0.12);
+}
+
+button.ghost.danger {
+  color: var(--danger);
+  border-color: rgba(194, 59, 59, 0.4);
+}
+
+button.ghost.danger:hover {
+  background: rgba(194, 59, 59, 0.12);
 }
 
 .toggle {
@@ -336,6 +432,29 @@ legend {
   color: var(--danger);
 }
 
+.tag {
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: var(--bg-soft);
+  color: var(--text-muted);
+}
+
+.tag--success {
+  background: rgba(31, 122, 70, 0.12);
+  color: var(--success);
+}
+
+.tag--warning {
+  background: rgba(198, 101, 26, 0.12);
+  color: var(--warning);
+}
+
+.tag--critical {
+  background: rgba(194, 59, 59, 0.12);
+  color: var(--danger);
+}
+
 .order-meta {
   display: flex;
   gap: 0.45rem;
@@ -357,16 +476,25 @@ legend {
   flex: 1;
 }
 
+.pipeline-next {
+  display: inline-block;
+  margin-top: 0.25rem;
+  color: var(--accent);
+  font-weight: 500;
+}
+
 .summary-list strong,
 .tracker-list strong,
-.order-list strong {
+.order-list strong,
+.pipeline-list strong {
   font-size: 0.94rem;
   color: var(--accent-strong);
 }
 
 .summary-list span,
 .tracker-list span,
-.order-list span {
+.order-list span,
+.pipeline-list span {
   font-size: 0.78rem;
   color: var(--text-muted);
 }

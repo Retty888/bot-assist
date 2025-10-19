@@ -21,5 +21,5 @@ The dashboard now follows the refreshed workflows requested by the trading desk.
 ## Next steps
 - [ ] Wire snapshot source selection (e.g., exchange toggle) when multiple venues are supported.
 - [ ] Attach server-side caching for QuickChart snapshots to reduce rate-limit risk.
-- [ ] Introduce status badges for potential signals (e.g., “Needs review”, “Ready to execute”).
-- [ ] Surface tracker controls for open positions (manual resolve, auto-close hooks).
+- [x] Introduce status badges for potential signals (e.g., “Needs review”, “Ready to execute”).
+- [x] Surface tracker controls for open positions (manual resolve, auto-close hooks).
